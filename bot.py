@@ -36,11 +36,16 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 # ==============================================================================
 # 🚀 HIGH-PERFORMANCE ENGINE (RAM Cache & Connection Pool)
 # ==============================================================================
+# Replace these strings with real file_ids later from your Render Logs!
+DEFAULT_MALE = "MALE_FILE_ID_HERE"
+DEFAULT_FEMALE = "FEMALE_FILE_ID_HERE"
+DEFAULT_OTHER = "OTHER_FILE_ID_HERE"
+
 ACTIVE_CHATS = {} 
 MESSAGE_MAP = {}
 GAME_STATES = {}       
 GAME_COOLDOWNS = {}    
-USER_LANGS = {} # [NEW] Lightning fast language memory
+USER_LANGS = {}
 
 DB_POOL = None
 GHOST = None 
@@ -62,7 +67,6 @@ def release_conn(conn):
     if DB_POOL and conn: DB_POOL.putconn(conn)
 
 async def get_lang(user_id):
-    """Fetches user language instantly from RAM, or loads it from DB."""
     if user_id in USER_LANGS: return USER_LANGS[user_id]
     conn = get_conn()
     if not conn: return "English"
@@ -101,7 +105,8 @@ def init_db():
             interests TEXT DEFAULT '', mood TEXT DEFAULT 'Neutral',
             karma_score INTEGER DEFAULT 100, status TEXT DEFAULT 'idle',
             partner_id BIGINT DEFAULT 0, report_count INTEGER DEFAULT 0,
-            banned_until TIMESTAMP, joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            banned_until TIMESTAMP, joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            nickname TEXT DEFAULT 'Anon', avatar_id TEXT
         );""",
         """CREATE TABLE IF NOT EXISTS chat_logs (
             id SERIAL PRIMARY KEY, sender_id BIGINT, receiver_id BIGINT,
@@ -121,6 +126,16 @@ def init_db():
         );"""
     ]
     for t in tables: cur.execute(t)
+    
+    # Migration checks for new columns
+    try:
+        cols = ["username TEXT", "first_name TEXT", "report_count INTEGER DEFAULT 0", 
+                "banned_until TIMESTAMP", "gender TEXT DEFAULT 'Hidden'", 
+                "age_range TEXT DEFAULT 'Hidden'", "region TEXT DEFAULT 'Hidden'",
+                "nickname TEXT DEFAULT 'Anon'", "avatar_id TEXT"]
+        for c in cols: cur.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {c};")
+    except: pass
+    
     conn.commit(); cur.close(); release_conn(conn)
     global GHOST
     GHOST = GhostEngine(DB_POOL)
@@ -154,21 +169,25 @@ def find_match(user_id):
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT language, interests, age_range, mood FROM users WHERE user_id = %s", (user_id,))
     me = cur.fetchone()
-    if not me: release_conn(conn); return None, [], "Neutral", "English"
+    if not me: release_conn(conn); return None, [], "Neutral", "English", "Anon", None, 100, "Hidden"
     my_lang, my_interests, my_age, my_mood = me
     my_tags = [t.strip().lower() for t in my_interests.split(',')] if my_interests else []
 
     cur.execute("SELECT target_id FROM user_interactions WHERE rater_id = %s AND score = -1", (user_id,))
     disliked_ids = {row[0] for row in cur.fetchall()}
 
-    cur.execute("""SELECT user_id, language, interests, age_range, mood FROM users WHERE status = 'searching' AND user_id != %s AND (banned_until IS NULL OR banned_until < NOW())""", (user_id,))
+    cur.execute("""
+        SELECT user_id, language, interests, age_range, mood, nickname, avatar_id, karma_score, gender 
+        FROM users 
+        WHERE status = 'searching' AND user_id != %s AND (banned_until IS NULL OR banned_until < NOW())
+    """, (user_id,))
     candidates = cur.fetchall()
     
     best_match, best_score, common_interests = None, -999999, []
-    p_mood, p_lang = "Neutral", "English"
+    p_mood, p_lang, p_nick, p_ava, p_karma, p_gen = "Neutral", "English", "Anon", None, 100, "Hidden"
 
     for cand in candidates:
-        cand_id, cand_lang, cand_interests, cand_age, cand_mood = cand
+        cand_id, cand_lang, cand_interests, cand_age, cand_mood, cand_nick, cand_ava, cand_karma, cand_gen = cand
         cand_tags = [t.strip().lower() for t in cand_interests.split(',')] if cand_interests else []
         score = 0
         if cand_id in disliked_ids: score -= 1000
@@ -183,9 +202,13 @@ def find_match(user_id):
             common_interests = matched_tags
             p_mood = cand_mood
             p_lang = cand_lang
+            p_nick = cand_nick
+            p_ava = cand_ava
+            p_karma = cand_karma
+            p_gen = cand_gen
 
     cur.close(); release_conn(conn)
-    return best_match, common_interests, p_mood, p_lang
+    return best_match, common_interests, p_mood, p_lang, p_nick, p_ava, p_karma, p_gen
 
 # ==============================================================================
 # 🎮 GAME ENGINE LOGIC
@@ -294,7 +317,7 @@ async def send_rps_round(context, p1, p2):
     await context.bot.send_message(p2, get_text(l2, "SHOOT"), reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 # ==============================================================================
-# 👮 ADMIN SYSTEM (Kept in English for Admins)
+# 👮 ADMIN SYSTEM 
 # ==============================================================================
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS: return
@@ -382,7 +405,7 @@ async def handle_feedback_command(update: Update, context: ContextTypes.DEFAULT_
     await update.message.reply_text("✅ **Feedback Sent!**", parse_mode='Markdown')
 
 # ==============================================================================
-# 📝 ONBOARDING (Kept in English to avoid over-complicating initial setup)
+# 📝 ONBOARDING (UPDATED WITH AVATAR & NICKNAME)
 # ==============================================================================
 async def send_onboarding_step(update, step):
     kb, msg = [], ""
@@ -414,14 +437,19 @@ async def send_onboarding_step(update, step):
               [InlineKeyboardButton("🥀 Lonely", callback_data="set_mood_Lonely"), InlineKeyboardButton("😰 Anxious", callback_data="set_mood_Anxious")],
               [InlineKeyboardButton("⏭️ Skip", callback_data="set_mood_Neutral")]]
     elif step == 6:
-        msg = "6️⃣ **Final Step! Interests**\n\nType keywords (e.g., *Music, Movies,kdrama..*) or click Skip."
-        kb = [[InlineKeyboardButton("⏭️ Skip & Finish", callback_data="onboarding_done")]]
+        msg = "6️⃣ **Interests**\n\nType keywords (e.g., *Music, Movies,kdrama..*) or click Skip."
+        kb = [[InlineKeyboardButton("⏭️ Skip to Name", callback_data="onboarding_step_7")]]
+    elif step == 7:
+        msg = "7️⃣ **What's your Nickname?**\n\nType a cool nickname to be shown on your profile card."
+        kb = [[InlineKeyboardButton("⏭️ Skip (Use 'Anon')", callback_data="onboarding_step_8")]]
+    elif step == 8:
+        msg = "8️⃣ **Final Step! Vibe Avatar** 📸\n\nSend a cool image (Ghibli, Anime, Vector) to represent you. \n\n⚠️ *NO Real Faces or NSFW! Violators will be permanently banned.*"
+        kb = [[InlineKeyboardButton("⏭️ Skip (Use Default)", callback_data="onboarding_done")]]
 
     try:
         if update.callback_query: await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
         else: await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
     except: pass
-
 
 # ==============================================================================
 # 📱 MAIN CONTROLLER
@@ -449,126 +477,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
         await show_main_menu(update)
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = (
-        "🆘 **USER GUIDE**\n\n"
-        "**1. How to Chat?**\nClick '🚀 Start Matching'. You will be connected to a random stranger.\n\n"
-        "**2. The Games**\nClick '🎮 Games' inside a chat to challenge your partner.\n\n"
-        "**3. Safety First**\n• End to End Encrypted.\n• To leave: Click '🛑 Stop'.\n• Behave Respectful to avoid Permanent **BAN**.\n\n"
-        "**4. Commands**\n/start - Restart Bot\n/feedback [msg] - Send your feedback"
-    )
-    await update.message.reply_text(msg, parse_mode='Markdown')
-
-async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message: return
-    text = update.message.text
-    user_id = update.effective_user.id
-    l = await get_lang(user_id)
-
-    # 1. GAME MANUAL QUESTION
-    if context.user_data.get("state") == "GAME_MANUAL":
-        partner_id = ACTIVE_CHATS.get(user_id)
-        if partner_id:
-             p_lang = await get_lang(partner_id)
-             await context.bot.send_message(partner_id, get_text(p_lang, "QUESTION").format(q=text), parse_mode='Markdown')
-             await update.message.reply_text(get_text(l, "ASKED").format(q=text))
-             
-             if partner_id in GAME_STATES:
-                 GAME_STATES[partner_id]["status"] = "answering"
-                 GAME_STATES[partner_id]["turn"] = partner_id
-        
-        context.user_data["state"] = None
-        return
-
-    # 2. ONBOARDING
-    if context.user_data.get("state") == "ONBOARDING_INTEREST":
-        await update_user(user_id, "interests", text)
-        context.user_data["state"] = None
-        await update.message.reply_text("✅ **Ready!**", reply_markup=get_keyboard_lobby(l), parse_mode='Markdown'); return
-
-    # 3. MULTI-LANGUAGE BUTTON TRIGGERS
-    if text in [x["START_BTN"] for x in locale_data.TEXTS.values()]: await start_search(update, context); return
-    if text in [x["STOP_SEARCH"] for x in locale_data.TEXTS.values()]: await stop_search_process(update, context); return
-    
-    if text in [x["CHANGE_INTERESTS"] for x in locale_data.TEXTS.values()]: 
-        context.user_data["state"] = "ONBOARDING_INTEREST"
-        await update.message.reply_text("👇 Type interests:", reply_markup=ReplyKeyboardRemove()); return
-
-    if text in [x["SETTINGS"] for x in locale_data.TEXTS.values()]:
-        kb = [[InlineKeyboardButton("🚻 Gender", callback_data="set_gen_menu"), InlineKeyboardButton("🎂 Age", callback_data="set_age_menu")],
-              [InlineKeyboardButton("🗣️ Lang", callback_data="set_lang_menu"), InlineKeyboardButton("🎭 Mood", callback_data="set_mood_menu")],
-              [InlineKeyboardButton("🔙 Close", callback_data="close_settings")]]
-        await update.message.reply_text("⚙️ **Settings:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown'); return
-
-    if text in [x["MY_ID"] for x in locale_data.TEXTS.values()]: await show_profile(update, context); return
-    if text in [x["HELP"] for x in locale_data.TEXTS.values()]: await help_command(update, context); return
-
-    all_stops = [x["BTN_STOP"] for x in locale_data.TEXTS.values()] + [x["BTN_STOP_CHAT"] for x in locale_data.TEXTS.values()]
-    if text in all_stops or text == "🛑 Stop": await stop_chat(update, context); return
-    if text in [x["BTN_NEXT"] for x in locale_data.TEXTS.values()] or text == "⏭️ Next": await stop_chat(update, context, is_next=True); return
-    
-    # 4. GAME MENU
-    if text in [x["BTN_GAMES"] for x in locale_data.TEXTS.values()] or text == "🎮 Games":
-        kb = [[InlineKeyboardButton("😈 Truth or Dare", callback_data="game_offer_Truth or Dare")],
-              [InlineKeyboardButton("🎲 Would You Rather", callback_data="game_offer_Would You Rather")],
-              [InlineKeyboardButton("✂️ Rock Paper Scissors", callback_data="rps_mode_select")]]
-        await update.message.reply_text(get_text(l, "GAME_CENTER"), reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown'); return
-    
-    if text in [x["BTN_STOP_GAME"] for x in locale_data.TEXTS.values()] or text == "🛑 Stop Game":
-        pid = ACTIVE_CHATS.get(user_id)
-        if user_id in GAME_STATES: del GAME_STATES[user_id]
-        if pid and pid in GAME_STATES: del GAME_STATES[pid]
-        await update.message.reply_text(get_text(l, "GAME_STOPPED"), reply_markup=get_keyboard_chat(l))
-        if pid: 
-            p_lang = await get_lang(pid)
-            await context.bot.send_message(pid, get_text(p_lang, "PARTNER_STOPPED_GAME"), reply_markup=get_keyboard_chat(p_lang))
-        return
-
-    # 5. COMMANDS
-    if text.startswith("/"):
-        cmd = text.lower().strip()
-        
-        if cmd == "/search":
-            conn = get_conn(); cur = conn.cursor()
-            cur.execute("SELECT status FROM users WHERE user_id = %s", (user_id,))
-            status_row = cur.fetchone()
-            cur.close(); release_conn(conn)
-            
-            if user_id in ACTIVE_CHATS: await update.message.reply_text(get_text(l, "CMD_IN_CHAT"), parse_mode='Markdown')
-            elif status_row and status_row[0] == 'searching': await update.message.reply_text(get_text(l, "CMD_IN_WAIT"), parse_mode='Markdown')
-            else: await start_search(update, context)
-            return
-
-        if cmd == "/stop": 
-            if user_id not in ACTIVE_CHATS: await update.message.reply_text(get_text(l, "CMD_NOT_IN_CHAT_STOP"), parse_mode='Markdown')
-            else: await stop_chat(update, context)
-            return
-
-        if cmd == "/next": 
-            if user_id not in ACTIVE_CHATS: await update.message.reply_text(get_text(l, "CMD_NOT_IN_CHAT_NEXT"), parse_mode='Markdown')
-            else: await stop_chat(update, context, is_next=True)
-            return
-        
-        if cmd == "/admin": await admin_panel(update, context); return
-        if cmd.startswith("/ban"): await admin_ban_command(update, context); return
-        if cmd.startswith("/warn"): await admin_warn_command(update, context); return
-        if cmd.startswith("/broadcast"): await admin_broadcast_execute(update, context); return
-        if cmd.startswith("/feedback"): await handle_feedback_command(update, context); return
-
-    await relay_message(update, context)
-
 # ==============================================================================
-# 🔌 FAST CONNECTION LOGIC (RAM + DB)
+# 🔌 FAST CONNECTION LOGIC (Trading Card UI)
 # ==============================================================================
 async def execute_ghost_search(context, user_id, u_gender, u_region):
     await asyncio.sleep(15)  
-    
     conn = get_conn()
     if not conn: return
     cur = conn.cursor()
     cur.execute("SELECT status FROM users WHERE user_id = %s", (user_id,))
-    status = cur.fetchone()
-    cur.close(); release_conn(conn)
+    status = cur.fetchone(); cur.close(); release_conn(conn)
     
     if status and status[0] == 'searching':
         persona = GHOST.pick_random_persona() 
@@ -578,11 +496,16 @@ async def execute_ghost_search(context, user_id, u_gender, u_region):
         if success:
             ACTIVE_CHATS[user_id] = f"AI_{persona}"
             l = await get_lang(user_id)
-            msg = get_text(l, "PARTNER_FOUND").format(mood="Random", common="Random", lang="Mixed")
-            try: await context.bot.send_message(user_id, msg, reply_markup=get_keyboard_chat(l), parse_mode='Markdown')
+            
+            card = (f"🪪 **OFFICIAL ANON ID**\n━━━━━━━━━━━━━━━\n"
+                    f"👤 **Name:** Anon\n👑 **Status:** 🌟 Trusted Veteran\n🎭 **Vibe:** Random\n\n"
+                    f"📊 **STATS:**\n🔗 **Common:** Random\n\n⚠️ *Say Hi to start chatting!*")
+            try: 
+                await context.bot.send_message(user_id, f"🖼️ [Ghost Avatar]\n\n{card}", parse_mode='Markdown')
+                await context.bot.send_message(user_id, "🎮 Menu unlocked below.", reply_markup=get_keyboard_chat(l))
             except: pass
 
-async def connect_users(context, user_id, partner_id, common, p_mood, p_lang_text):
+async def connect_users(context, user_id, partner_id, common, p_mood, p_lang, p_nick, p_ava, p_karma, p_gen):
     for uid in [user_id, partner_id]:
         if isinstance(ACTIVE_CHATS.get(uid), str):
             if uid in GAME_STATES: del GAME_STATES[uid]
@@ -590,23 +513,41 @@ async def connect_users(context, user_id, partner_id, common, p_mood, p_lang_tex
     conn = get_conn(); cur = conn.cursor()
     cur.execute("UPDATE users SET status='chatting', partner_id=%s WHERE user_id=%s", (partner_id, user_id))
     cur.execute("UPDATE users SET status='chatting', partner_id=%s WHERE user_id=%s", (user_id, partner_id))
+    
+    cur.execute("SELECT nickname, avatar_id, karma_score, gender, mood FROM users WHERE user_id=%s", (user_id,))
+    u1 = cur.fetchone()
     conn.commit(); cur.close(); release_conn(conn)
     
-    ACTIVE_CHATS[user_id] = partner_id
-    ACTIVE_CHATS[partner_id] = user_id
+    u1_nick = u1[0] if u1 else "Anon"
+    u1_ava = u1[1] if u1 else None
+    u1_karma = u1[2] if u1 else 100
+    u1_gen = u1[3] if u1 else "Hidden"
+    u1_mood = u1[4] if u1 else "Neutral"
     
+    ACTIVE_CHATS[user_id] = partner_id; ACTIVE_CHATS[partner_id] = user_id
     common_str = ", ".join(common).title() if common else "Random"
+    l1 = await get_lang(user_id); l2 = await get_lang(partner_id)
     
-    l1 = await get_lang(user_id)
-    l2 = await get_lang(partner_id)
+    def get_title(k): return "🌟 Trusted Veteran" if k >= 150 else ("⚠️ Suspect" if k <= 50 else "🌱 Rookie")
+    def get_def(g): return DEFAULT_MALE if g == "Male" else (DEFAULT_FEMALE if g == "Female" else DEFAULT_OTHER)
+
+    c1 = f"🪪 **OFFICIAL ANON ID**\n━━━━━━━━━━━━━━━\n👤 **Name:** {p_nick}\n👑 **Status:** {get_title(p_karma)}\n🎭 **Vibe:** {p_mood}\n\n📊 **STATS:**\n🔗 **Common:** {common_str}\n\n⚠️ *Say Hi to start chatting!*"
+    a1 = p_ava if p_ava else get_def(p_gen)
+    kb1 = InlineKeyboardMarkup([[InlineKeyboardButton("🚨 Report Profile", callback_data=f"report_profile_{partner_id}")]])
     
-    msg1 = get_text(l1, "PARTNER_FOUND").format(mood=p_mood, common=common_str, lang=p_lang_text)
-    msg2 = get_text(l2, "PARTNER_FOUND").format(mood=p_mood, common=common_str, lang=p_lang_text)
+    c2 = f"🪪 **OFFICIAL ANON ID**\n━━━━━━━━━━━━━━━\n👤 **Name:** {u1_nick}\n👑 **Status:** {get_title(u1_karma)}\n🎭 **Vibe:** {u1_mood}\n\n📊 **STATS:**\n🔗 **Common:** {common_str}\n\n⚠️ *Say Hi to start chatting!*"
+    a2 = u1_ava if u1_ava else get_def(u1_gen)
+    kb2 = InlineKeyboardMarkup([[InlineKeyboardButton("🚨 Report Profile", callback_data=f"report_profile_{user_id}")]])
     
-    try: await context.bot.send_message(user_id, msg1, reply_markup=get_keyboard_chat(l1), parse_mode='Markdown')
-    except: pass
-    try: await context.bot.send_message(partner_id, msg2, reply_markup=get_keyboard_chat(l2), parse_mode='Markdown')
-    except: pass
+    for target, av, cap, kb, lang in [(user_id, a1, c1, kb1, l1), (partner_id, a2, c2, kb2, l2)]:
+        try:
+            if av and av != "MALE_FILE_ID_HERE" and av != "FEMALE_FILE_ID_HERE" and av != "OTHER_FILE_ID_HERE": 
+                await context.bot.send_photo(target, photo=av, caption=cap, reply_markup=kb, parse_mode='Markdown')
+            else: 
+                await context.bot.send_message(target, f"🖼️ [No Avatar Set]\n\n{cap}", reply_markup=kb, parse_mode='Markdown')
+            await context.bot.send_message(target, "🎮 Menu unlocked below.", reply_markup=get_keyboard_chat(lang))
+        except Exception as e: 
+            print("Card Error:", e)
 
 async def stop_search_process(update, context):
     user_id = update.effective_user.id
@@ -614,7 +555,6 @@ async def stop_search_process(update, context):
     conn = get_conn(); cur = conn.cursor()
     cur.execute("UPDATE users SET status = 'idle' WHERE user_id = %s", (user_id,))
     conn.commit(); cur.close(); release_conn(conn)
-    
     try:
         if update.callback_query: await update.callback_query.message.reply_text(get_text(l, "STOPPED_SEARCH"), reply_markup=get_keyboard_lobby(l), parse_mode='Markdown')
         else: await update.message.reply_text(get_text(l, "STOPPED_SEARCH"), reply_markup=get_keyboard_lobby(l), parse_mode='Markdown')
@@ -623,23 +563,16 @@ async def stop_search_process(update, context):
 async def start_search(update, context):
     user_id = update.effective_user.id
     l = await get_lang(user_id)
+    if user_id in ACTIVE_CHATS: await update.message.reply_text(get_text(l, "ALREADY_IN_CHAT"), parse_mode='Markdown'); return
     
-    if user_id in ACTIVE_CHATS:
-        await update.message.reply_text(get_text(l, "ALREADY_IN_CHAT"), parse_mode='Markdown'); return
-
     conn = get_conn(); cur = conn.cursor()
     cur.execute("UPDATE users SET status = 'searching' WHERE user_id = %s", (user_id,))
-    
     cur.execute("SELECT gender, region, interests FROM users WHERE user_id = %s", (user_id,))
-    row = cur.fetchone()
-    u_gender = row[0] if row else "Hidden"
-    u_region = row[1] if row else "Unknown"
-    tags = row[2] or "Any"
+    row = cur.fetchone(); u_gender = row[0] if row else "Hidden"; u_region = row[1] if row else "Unknown"; tags = row[2] or "Any"
     conn.commit(); cur.close(); release_conn(conn)
     
     await update.message.reply_text(get_text(l, "SEARCHING_MSG").format(tags=tags), parse_mode='Markdown', reply_markup=get_keyboard_searching(l))
-    
-    partner_id, common, p_mood, p_lang_text = find_match(user_id)
+    partner_id, common, p_mood, p_lang, p_nick, p_ava, p_karma, p_gen = find_match(user_id)
     
     if partner_id:
         partner_chat_state = ACTIVE_CHATS.get(partner_id)
@@ -648,22 +581,20 @@ async def start_search(update, context):
             conn = get_conn(); cur = conn.cursor()
             cur.execute("UPDATE users SET status='idle' WHERE user_id = %s", (partner_id,))
             conn.commit(); cur.close(); release_conn(conn)
-            
-            p_lang = await get_lang(partner_id)
+            p_l = await get_lang(partner_id)
             kb_feedback = [[InlineKeyboardButton("👍", callback_data="rate_like_AI"), InlineKeyboardButton("👎", callback_data="rate_dislike_AI")], [InlineKeyboardButton("⚠️ Report", callback_data="rate_report_AI")]]
             try:
-                await context.bot.send_message(partner_id, get_text(p_lang, "DISCONNECTED"), reply_markup=get_keyboard_lobby(p_lang), parse_mode='Markdown')
-                await context.bot.send_message(partner_id, get_text(p_lang, "RATE_STRANGER"), reply_markup=InlineKeyboardMarkup(kb_feedback))
+                await context.bot.send_message(partner_id, get_text(p_l, "DISCONNECTED"), reply_markup=get_keyboard_lobby(p_l), parse_mode='Markdown')
+                await context.bot.send_message(partner_id, get_text(p_l, "RATE_STRANGER"), reply_markup=InlineKeyboardMarkup(kb_feedback))
             except: pass
         else:
-            await connect_users(context, user_id, partner_id, common, p_mood, p_lang_text)
+            await connect_users(context, user_id, partner_id, common, p_mood, p_lang, p_nick, p_ava, p_karma, p_gen)
             return 
-
     asyncio.create_task(execute_ghost_search(context, user_id, u_gender, u_region))
 
 async def perform_match(update, context, user_id):
-    partner_id, common, p_mood, p_lang_text = find_match(user_id)
-    if partner_id: await connect_users(context, user_id, partner_id, common, p_mood, p_lang_text)
+    partner_id, common, p_mood, p_lang, p_nick, p_ava, p_karma, p_gen = find_match(user_id)
+    if partner_id: await connect_users(context, user_id, partner_id, common, p_mood, p_lang, p_nick, p_ava, p_karma, p_gen)
 
 async def stop_chat(update, context, is_next=False):
     user_id = update.effective_user.id
@@ -705,6 +636,19 @@ async def stop_chat(update, context, is_next=False):
         await update.message.reply_text(get_text(l, "DISCONNECTED"), reply_markup=get_keyboard_lobby(l), parse_mode='Markdown')
         await update.message.reply_text(get_text(l, "RATE_STRANGER"), reply_markup=InlineKeyboardMarkup(k_me))
 
+# ==============================================================================
+# 🗣️ MESSAGE RELAY & TEXT HANDLERS
+# ==============================================================================
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = (
+        "🆘 **USER GUIDE**\n\n"
+        "**1. How to Chat?**\nClick '🚀 Start Matching'. You will be connected to a random stranger.\n\n"
+        "**2. The Games**\nClick '🎮 Games' inside a chat to challenge your partner.\n\n"
+        "**3. Safety First**\n• End to End Encrypted.\n• To leave: Click '🛑 Stop'.\n• Behave Respectful to avoid Permanent **BAN**.\n\n"
+        "**4. Commands**\n/start - Restart Bot\n/feedback [msg] - Send your feedback"
+    )
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
 async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message_reaction: return
     user_id = update.effective_user.id
@@ -723,6 +667,16 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def relay_message(update, context):
     user_id = update.effective_user.id
+    
+    # --- INTERCEPT AVATAR UPLOADS ---
+    if context.user_data.get("state") == "ONBOARDING_AVATAR" and update.message and update.message.photo:
+        file_id = update.message.photo[-1].file_id
+        await update_user(user_id, "avatar_id", file_id)
+        context.user_data["state"] = None
+        print(f"\n📸 NEW AVATAR UPLOADED! ID: {file_id}\n") # Use this to find your default IDs!
+        await update.message.reply_text("✅ **Profile Complete!**", reply_markup=get_keyboard_lobby(await get_lang(user_id)), parse_mode='Markdown')
+        return
+
     l = await get_lang(user_id)
     partner_id = ACTIVE_CHATS.get(user_id)
     if not partner_id: return 
@@ -833,6 +787,106 @@ async def relay_message(update, context):
                 if sent_msg: MESSAGE_MAP[(partner_id, sent_msg.message_id)] = update.message.message_id
             except: await stop_chat(update, context)
 
+async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message: return
+    text = update.message.text
+    user_id = update.effective_user.id
+    l = await get_lang(user_id)
+
+    if context.user_data.get("state") == "GAME_MANUAL":
+        partner_id = ACTIVE_CHATS.get(user_id)
+        if partner_id:
+             p_lang = await get_lang(partner_id)
+             await context.bot.send_message(partner_id, get_text(p_lang, "QUESTION").format(q=text), parse_mode='Markdown')
+             await update.message.reply_text(get_text(l, "ASKED").format(q=text))
+             if partner_id in GAME_STATES:
+                 GAME_STATES[partner_id]["status"] = "answering"; GAME_STATES[partner_id]["turn"] = partner_id
+        context.user_data["state"] = None
+        return
+
+    # --- ONBOARDING & EDITS ---
+    state = context.user_data.get("state")
+    if state == "ONBOARDING_INTEREST":
+        await update_user(user_id, "interests", text)
+        context.user_data["state"] = "ONBOARDING_NICKNAME"
+        await send_onboarding_step(update, 7); return
+    if state == "ONBOARDING_NICKNAME":
+        await update_user(user_id, "nickname", text[:20]) 
+        context.user_data["state"] = "ONBOARDING_AVATAR"
+        await send_onboarding_step(update, 8); return
+    if state == "ONBOARDING_AVATAR":
+        await update.message.reply_text("⚠️ Please send an **IMAGE**, or click Skip."); return
+
+    if text in [x["START_BTN"] for x in locale_data.TEXTS.values()]: await start_search(update, context); return
+    if text in [x["STOP_SEARCH"] for x in locale_data.TEXTS.values()]: await stop_search_process(update, context); return
+    
+    if text in [x["CHANGE_INTERESTS"] for x in locale_data.TEXTS.values()]: 
+        context.user_data["state"] = "ONBOARDING_INTEREST"
+        await update.message.reply_text("👇 Type interests:", reply_markup=ReplyKeyboardRemove()); return
+
+    all_settings = [x["SETTINGS"] for x in locale_data.TEXTS.values()]
+    if text in all_settings:
+        kb = [
+            [InlineKeyboardButton("🚻 Gender", callback_data="set_gen_menu"), InlineKeyboardButton("🎂 Age", callback_data="set_age_menu")],
+            [InlineKeyboardButton("🗣️ Lang", callback_data="set_lang_menu"), InlineKeyboardButton("🎭 Mood", callback_data="set_mood_menu")],
+            [InlineKeyboardButton("📝 Name", callback_data="edit_nickname"), InlineKeyboardButton("📸 Avatar", callback_data="edit_avatar")],
+            [InlineKeyboardButton("🔙 Close", callback_data="close_settings")]
+        ]
+        await update.message.reply_text("⚙️ **Settings:**", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown'); return
+
+    if text in [x["MY_ID"] for x in locale_data.TEXTS.values()]: await show_profile(update, context); return
+    if text in [x["HELP"] for x in locale_data.TEXTS.values()]: await help_command(update, context); return
+
+    all_stops = [x["BTN_STOP"] for x in locale_data.TEXTS.values()] + [x["BTN_STOP_CHAT"] for x in locale_data.TEXTS.values()]
+    if text in all_stops or text == "🛑 Stop": await stop_chat(update, context); return
+    if text in [x["BTN_NEXT"] for x in locale_data.TEXTS.values()] or text == "⏭️ Next": await stop_chat(update, context, is_next=True); return
+    
+    if text in [x["BTN_GAMES"] for x in locale_data.TEXTS.values()] or text == "🎮 Games":
+        kb = [[InlineKeyboardButton("😈 Truth or Dare", callback_data="game_offer_Truth or Dare")],
+              [InlineKeyboardButton("🎲 Would You Rather", callback_data="game_offer_Would You Rather")],
+              [InlineKeyboardButton("✂️ Rock Paper Scissors", callback_data="rps_mode_select")]]
+        await update.message.reply_text(get_text(l, "GAME_CENTER"), reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown'); return
+    
+    if text in [x["BTN_STOP_GAME"] for x in locale_data.TEXTS.values()] or text == "🛑 Stop Game":
+        pid = ACTIVE_CHATS.get(user_id)
+        if user_id in GAME_STATES: del GAME_STATES[user_id]
+        if pid and pid in GAME_STATES: del GAME_STATES[pid]
+        await update.message.reply_text(get_text(l, "GAME_STOPPED"), reply_markup=get_keyboard_chat(l))
+        if pid: 
+            p_lang = await get_lang(pid)
+            await context.bot.send_message(pid, get_text(p_lang, "PARTNER_STOPPED_GAME"), reply_markup=get_keyboard_chat(p_lang))
+        return
+
+    if text.startswith("/"):
+        cmd = text.lower().strip()
+        if cmd == "/search":
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("SELECT status FROM users WHERE user_id = %s", (user_id,))
+            status_row = cur.fetchone(); cur.close(); release_conn(conn)
+            
+            if user_id in ACTIVE_CHATS: await update.message.reply_text(get_text(l, "CMD_IN_CHAT"), parse_mode='Markdown')
+            elif status_row and status_row[0] == 'searching': await update.message.reply_text(get_text(l, "CMD_IN_WAIT"), parse_mode='Markdown')
+            else: await start_search(update, context)
+            return
+
+        if cmd == "/stop": 
+            if user_id not in ACTIVE_CHATS: await update.message.reply_text(get_text(l, "CMD_NOT_IN_CHAT_STOP"), parse_mode='Markdown')
+            else: await stop_chat(update, context)
+            return
+
+        if cmd == "/next": 
+            if user_id not in ACTIVE_CHATS: await update.message.reply_text(get_text(l, "CMD_NOT_IN_CHAT_NEXT"), parse_mode='Markdown')
+            else: await stop_chat(update, context, is_next=True)
+            return
+        
+        if cmd == "/admin": await admin_panel(update, context); return
+        if cmd.startswith("/ban"): await admin_ban_command(update, context); return
+        if cmd.startswith("/warn"): await admin_warn_command(update, context); return
+        if cmd.startswith("/broadcast"): await admin_broadcast_execute(update, context); return
+        if cmd.startswith("/feedback"): await handle_feedback_command(update, context); return
+
+    await relay_message(update, context)
+
 # ==============================================================================
 # 🧩 HELPERS & BUTTON HANDLER
 # ==============================================================================
@@ -840,22 +894,28 @@ async def send_reroll_option(context: ContextTypes.DEFAULT_TYPE):
     user_id = context.job.data
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT status FROM users WHERE user_id = %s", (user_id,))
-    status = cur.fetchone()
+    status = cur.fetchone(); cur.close(); release_conn(conn)
     
     if status and status[0] == 'searching':
         l = await get_lang(user_id)
         kb = [[InlineKeyboardButton("🔔", callback_data="notify_me")], [InlineKeyboardButton("📡", callback_data="keep_searching")]]
         try: await context.bot.send_message(user_id, get_text(l, "WAIT_NOTIFY"), reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
         except: pass
-    cur.close(); release_conn(conn)
 
 async def show_profile(update, context):
     user_id = update.effective_user.id
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT language, interests, karma_score, gender, age_range, region, mood FROM users WHERE user_id = %s", (user_id,))
+    cur.execute("SELECT language, interests, karma_score, gender, age_range, region, mood, nickname, avatar_id FROM users WHERE user_id = %s", (user_id,))
     data = cur.fetchone(); cur.close(); release_conn(conn)
-    text = f"👤 **IDENTITY**\n━━━━━━━━━━━━━━━━\n🗣️ {data[0]}\n🏷️ {data[1]}\n🚻 {data[3]}\n🎂 {data[4]}\n🌍 {data[5]}\n🎭 {data[6]}\n🛡️ {data[2]}%"
-    await update.message.reply_text(text, parse_mode='Markdown')
+    text = f"🪪 **MY ANON ID**\n━━━━━━━━━━━━━━━━\n👤 **Name:** {data[7]}\n🗣️ **Lang:** {data[0]}\n🏷️ **Tags:** {data[1]}\n🚻 **Gen:** {data[3]}\n🎂 **Age:** {data[4]}\n🌍 **Reg:** {data[5]}\n🎭 **Vibe:** {data[6]}\n🛡️ **Karma:** {data[2]}"
+    
+    try:
+        if data[8] and data[8] not in ["MALE_FILE_ID_HERE", "FEMALE_FILE_ID_HERE", "OTHER_FILE_ID_HERE"]:
+            await update.message.reply_photo(photo=data[8], caption=text, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(f"🖼️ [No Custom Avatar]\n\n{text}", parse_mode='Markdown')
+    except:
+        await update.message.reply_text(text, parse_mode='Markdown')
 
 async def show_main_menu(update):
     user = update.effective_user
@@ -918,16 +978,56 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "set_age_menu": await send_onboarding_step(update, 2); return
     if data == "set_lang_menu": await send_onboarding_step(update, 3); return
     if data == "set_mood_menu": await send_onboarding_step(update, 5); return
-    if data == "force_random": await perform_match(update, context, uid); return
     if data == "close_settings": await q.delete_message(); return
     
+    if data.startswith("set_mood_"): await update_user(uid, "mood", data.split("_")[2]); context.user_data["state"] = "ONBOARDING_INTEREST"; await send_onboarding_step(update, 6); return
+    if data == "onboarding_step_7": context.user_data["state"] = "ONBOARDING_NICKNAME"; await send_onboarding_step(update, 7); return
+    if data == "onboarding_step_8": context.user_data["state"] = "ONBOARDING_AVATAR"; await send_onboarding_step(update, 8); return
+    if data == "onboarding_done": context.user_data["state"] = None; await show_main_menu(update); return
+
+    if data == "edit_nickname": context.user_data["state"] = "ONBOARDING_NICKNAME"; await q.edit_message_text("👇 Type new nickname:"); return
+    if data == "edit_avatar": context.user_data["state"] = "ONBOARDING_AVATAR"; await q.edit_message_text("📸 Send new avatar image:"); return
+
+    # ADMIN: PROFILE REPORTING SYSTEM
+    if data.startswith("report_profile_"):
+        target_id = data.split("_")[2]
+        await q.edit_message_text("🚨 Report sent to admins.")
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT nickname, avatar_id FROM users WHERE user_id = %s", (int(target_id),))
+        t_data = cur.fetchone(); cur.close(); release_conn(conn)
+        if t_data:
+            akb = [[InlineKeyboardButton("🗑️ Delete Avatar", callback_data=f"admin_del_avatar_{target_id}"), InlineKeyboardButton("🔨 Ban User", callback_data=f"ban_user_{target_id}")],
+                   [InlineKeyboardButton("✅ Innocent", callback_data=f"admin_ignore_rep_{target_id}")]]
+            for a in ADMIN_IDS:
+                try:
+                    rep_msg = f"🚨 **PROFILE REPORT**\nID: `{target_id}`\nName: {t_data[0]}"
+                    if t_data[1] and t_data[1] not in ["MALE_FILE_ID_HERE", "FEMALE_FILE_ID_HERE", "OTHER_FILE_ID_HERE"]: 
+                        await context.bot.send_photo(a, photo=t_data[1], caption=rep_msg, reply_markup=InlineKeyboardMarkup(akb), parse_mode='Markdown')
+                    else: 
+                        await context.bot.send_message(a, f"[No Avatar]\n{rep_msg}", reply_markup=InlineKeyboardMarkup(akb), parse_mode='Markdown')
+                except: pass
+        return
+
+    if data.startswith("admin_del_avatar_"):
+        if uid not in ADMIN_IDS: return
+        target_id = data.split("_")[3]
+        await update_user(int(target_id), "avatar_id", None)
+        try: await context.bot.send_message(int(target_id), "⚠️ **WARNING:** Your avatar was removed by an admin for violating guidelines.", parse_mode='Markdown')
+        except: pass
+        await q.edit_message_caption("🗑️ Avatar Deleted & User Warned.")
+        return
+
+    if data.startswith("admin_ignore_rep_"):
+        if uid not in ADMIN_IDS: return
+        await q.edit_message_caption("✅ Report Dismissed.")
+        return
+
     if data == "notify_me":
         conn = get_conn(); cur = conn.cursor()
         cur.execute("UPDATE users SET status = 'waiting_notify' WHERE user_id = %s", (uid,))
         conn.commit(); cur.close(); release_conn(conn)
         await q.edit_message_text(get_text(l, "WAIT_NOTIFY"), parse_mode='Markdown')
-        await show_main_menu(update)
-        return
+        await show_main_menu(update); return
 
     if data == "keep_searching": await q.delete_message(); return
         
@@ -957,8 +1057,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(pid, get_text(p_lang, "QUESTION").format(q=q_text), parse_mode='Markdown')
                 await q.edit_message_text(get_text(l, "ASKED").format(q=q_text))
                 if pid in GAME_STATES: 
-                    GAME_STATES[pid]["status"] = "answering"
-                    GAME_STATES[pid]["turn"] = pid 
+                    GAME_STATES[pid]["status"] = "answering"; GAME_STATES[pid]["turn"] = pid 
         return
         
     if data == "tod_manual": context.user_data["state"] = "GAME_MANUAL"; await q.edit_message_text(get_text(l, "TYPE_Q_NOW")); return
@@ -986,12 +1085,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sc_me, sc_pa = gd.get(f"s_{uid}", 0), gd.get(f"s_{partner_id}", 0)
             
             if gd["cur_r"] >= gd["max_r"]:
-                final_res = get_text(l, "DRAW_MATCH")
-                p_final = get_text(p_lang, "DRAW_MATCH")
-                if sc_me > sc_pa: 
-                    final_res = get_text(l, "WON_MATCH"); p_final = get_text(p_lang, "LOST_MATCH")
-                elif sc_pa > sc_me: 
-                    final_res = get_text(l, "LOST_MATCH"); p_final = get_text(p_lang, "WON_MATCH")
+                final_res = get_text(l, "DRAW_MATCH"); p_final = get_text(p_lang, "DRAW_MATCH")
+                if sc_me > sc_pa: final_res = get_text(l, "WON_MATCH"); p_final = get_text(p_lang, "LOST_MATCH")
+                elif sc_pa > sc_me: final_res = get_text(l, "LOST_MATCH"); p_final = get_text(p_lang, "WON_MATCH")
                 
                 msg = get_text(l, "RPS_FINAL").format(max_r=gd['max_r'], s1=sc_me, s2=sc_pa, res=final_res)
                 p_msg = get_text(p_lang, "RPS_FINAL").format(max_r=gd['max_r'], s1=sc_pa, s2=sc_me, res=p_final)
@@ -1000,8 +1096,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(partner_id, p_msg, parse_mode='Markdown', reply_markup=get_keyboard_game(p_lang))
                 gd["moves"] = {}; del GAME_STATES[uid]; del GAME_STATES[partner_id]
             else:
-                r_res = get_text(l, "DRAW")
-                p_r_res = get_text(p_lang, "DRAW")
+                r_res = get_text(l, "DRAW"); p_r_res = get_text(p_lang, "DRAW")
                 if winner == uid:
                     r_res = get_text(l, "BEAT").format(m1=move.upper(), m2=p_move.upper())
                     p_r_res = get_text(p_lang, "LOST").format(m1=p_move.upper(), m2=move.upper())
@@ -1034,12 +1129,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             match_text, p_match_text = "", ""
             if choice == p_choice:
                 gd["streak"] = gd.get("streak", 0) + 1; s = gd["streak"]
-                match_text = get_text(l, "MATCH_100").format(s=s)
-                p_match_text = get_text(p_lang, "MATCH_100").format(s=s)
+                match_text = get_text(l, "MATCH_100").format(s=s); p_match_text = get_text(p_lang, "MATCH_100").format(s=s)
             else:
                 gd["streak"] = 0
-                match_text = get_text(l, "MATCH_DIFF")
-                p_match_text = get_text(p_lang, "MATCH_DIFF")
+                match_text = get_text(l, "MATCH_DIFF"); p_match_text = get_text(p_lang, "MATCH_DIFF")
 
             msg = get_text(l, "WYR_RESULTS").format(my_choice=choice, p_choice=p_choice, match=match_text)
             p_msg = get_text(p_lang, "WYR_RESULTS").format(my_choice=p_choice, p_choice=choice, match=p_match_text)
@@ -1054,24 +1147,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if data == "wyr_skip":
-        gd = GAME_STATES.get(uid)
-        pid = ACTIVE_CHATS.get(uid)
-        
+        gd = GAME_STATES.get(uid); pid = ACTIVE_CHATS.get(uid)
         if gd and gd.get("status") == "discussing":
             if "explained" not in gd: gd["explained"] = []
             if uid not in gd["explained"]:
                 gd["explained"].append(uid)
                 await q.edit_message_text(get_text(l, "YOU_SKIPPED"))
-                if pid: 
-                    p_lang = await get_lang(pid)
-                    await context.bot.send_message(pid, get_text(p_lang, "PARTNER_SKIPPED"))
+                if pid: await context.bot.send_message(pid, get_text(await get_lang(pid), "PARTNER_SKIPPED"))
             else:
                 await q.answer("⏳", show_alert=True); return
 
             if len(gd["explained"]) >= 2:
-                if pid: 
-                    p_lang = await get_lang(pid)
-                    await context.bot.send_message(pid, get_text(p_lang, "NEXT_ROUND"))
+                if pid: await context.bot.send_message(pid, get_text(await get_lang(pid), "NEXT_ROUND"))
                 await context.bot.send_message(uid, get_text(l, "NEXT_ROUND"))
                 gd["status"] = "playing"
                 await asyncio.sleep(1.5)
@@ -1082,9 +1169,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("set_age_"): await update_user(uid, "age_range", data.split("_")[2]); await send_onboarding_step(update, 3); return
     if data.startswith("set_lang_"): await update_user(uid, "language", data.split("_")[2]); await send_onboarding_step(update, 4); return
     if data.startswith("set_reg_"): await update_user(uid, "region", data.split("_")[2]); await send_onboarding_step(update, 5); return
-    if data.startswith("set_mood_"): await update_user(uid, "mood", data.split("_")[2]); context.user_data["state"] = "ONBOARDING_INTEREST"; await send_onboarding_step(update, 6); return
-    if data == "onboarding_done": context.user_data["state"] = None; await show_main_menu(update); return
-
+    
     if uid in ADMIN_IDS:
         if data == "admin_home": await admin_panel(update, context); return
         if data.startswith("ban_user_"): await admin_ban_command(update, context); return
@@ -1102,10 +1187,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cur.execute("INSERT INTO user_interactions (rater_id, target_id, score) VALUES (%s, %s, %s)", (uid, target, sc))
             conn.commit(); cur.close(); release_conn(conn)
             await q.edit_message_text("✅")
-    
-    if data == "action_search": await start_search(update, context); return
-    if data == "main_menu": await show_main_menu(update); return
-    if data == "stop_search": await stop_search_process(update, context); return
 
 if __name__ == '__main__':
     if not BOT_TOKEN: print("ERROR: Config missing")
@@ -1129,5 +1210,5 @@ if __name__ == '__main__':
         app.add_handler(MessageReactionHandler(handle_reaction))
         app.add_handler(MessageHandler(filters.ALL, relay_message))
         
-        print("🤖 PHASE 23 BOT LIVE - MULTILINGUAL")
+        print("🤖 PHASE 24 BOT LIVE - AVATARS & TRADING CARDS")
         app.run_polling(allowed_updates=["message", "callback_query", "message_reaction"])
