@@ -1048,7 +1048,46 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except: pass
             return
         if data in ["admin_broadcast_info", "admin_users", "admin_reports", "admin_feedbacks", "admin_banlist"]:
-            await q.answer("⏳ Detailed menus coming in the next update! Use /ban or /warn text commands for now.", show_alert=True)
+            conn = get_conn(); cur = conn.cursor()
+            text = "👮 **ADMIN MENU**\n━━━━━━━━━━━━━━━━\n\n"
+            
+            if data == "admin_broadcast_info":
+                text += "📢 **How to Broadcast:**\nType `/broadcast Your Message Here` in the chat. It will instantly send your message to ALL registered users."
+            
+            elif data == "admin_users":
+                cur.execute("SELECT user_id, nickname, joined_at FROM users ORDER BY joined_at DESC LIMIT 10")
+                rows = cur.fetchall()
+                text += "📜 **10 Newest Users:**\n"
+                for r in rows: text += f"• `{r[0]}` - {r[1]} ({r[2].strftime('%b %d')})\n"
+                
+            elif data == "admin_reports":
+                cur.execute("SELECT user_id, nickname, report_count FROM users WHERE report_count > 0 ORDER BY report_count DESC LIMIT 10")
+                rows = cur.fetchall()
+                text += "⚠️ **Most Reported Users:**\n"
+                if not rows: text += "No reports yet! 🎉\n"
+                for r in rows: text += f"• `{r[0]}` - {r[1]} (🚨 {r[2]} reports)\n"
+                
+            elif data == "admin_feedbacks":
+                cur.execute("SELECT user_id, message, timestamp FROM feedback ORDER BY timestamp DESC LIMIT 5")
+                rows = cur.fetchall()
+                text += "📨 **Latest Feedback:**\n"
+                if not rows: text += "No feedback yet!\n"
+                for r in rows: text += f"• `{r[0]}`: {r[1]}\n"
+                
+            elif data == "admin_banlist":
+                cur.execute("SELECT user_id, nickname, banned_until FROM users WHERE banned_until > NOW() ORDER BY banned_until DESC LIMIT 10")
+                rows = cur.fetchall()
+                text += "🚫 **Currently Banned:**\n"
+                if not rows: text += "No active bans! 😇\n"
+                for r in rows: text += f"• `{r[0]}` - {r[1]} (Until {r[2].strftime('%b %d, %H:%M')})\n"
+
+            cur.close(); release_conn(conn)
+            
+            kb = [[InlineKeyboardButton("🔙 Back to Control Room", callback_data="admin_home")]]
+            try: await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+            except: 
+                try: await q.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+                except: pass
             return
     if data.startswith("rate_"):
         parts = data.split("_"); act = parts[1]; target_str = parts[2]
