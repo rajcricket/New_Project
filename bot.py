@@ -155,11 +155,11 @@ def get_keyboard_searching(lang="English"):
 def get_keyboard_chat():
     return ReplyKeyboardMarkup([
         [KeyboardButton("🎮 Games")],
-        [KeyboardButton("⏭️ Next"), KeyboardButton("🛑 Stop")]
+        [KeyboardButton("🛑 Stop"), KeyboardButton("⏭️ Next")]
     ], resize_keyboard=True)
 
 def get_keyboard_game():
-    return ReplyKeyboardMarkup([[KeyboardButton("🛑 Stop Game"), KeyboardButton("🛑 Stop Chat")]], resize_keyboard=True)
+    return ReplyKeyboardMarkup([[KeyboardButton("🛑 Stop Chat"), KeyboardButton("🛑 Stop Game")]], resize_keyboard=True)
 
 
 # ==============================================================================
@@ -633,30 +633,31 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # User Commands
         if cmd == "/search":
-            # 1. Check DB for 'searching' status (ACTIVE_CHATS only tracks active chats, not waiters)
             conn = get_conn(); cur = conn.cursor()
             cur.execute("SELECT status FROM users WHERE user_id = %s", (user_id,))
             status_row = cur.fetchone()
             cur.close(); release_conn(conn)
             
-            # 2. Logic: If in RAM (Chatting) OR DB says Searching -> Block it
-            if user_id in ACTIVE_CHATS or (status_row and status_row[0] == 'searching'):
-                await update.message.reply_text("⚠️ **User are already in chat** (or connecting).", parse_mode='Markdown')
+            if user_id in ACTIVE_CHATS:
+                await update.message.reply_text("⚠️ **You are already chatting!**\n\n💡 Use `/next` to skip to someone else, or `/stop` to end this chat.", parse_mode='Markdown')
+            elif status_row and status_row[0] == 'searching':
+                await update.message.reply_text("⚠️ **You are already in the waiting room!**\n\n💡 Please wait for a match or click '❌ Stop Searching'.", parse_mode='Markdown')
             else:
                 await start_search(update, context)
             return
 
         if cmd == "/stop": 
-            # 1. Logic: If NOT in RAM cache, you aren't chatting
             if user_id not in ACTIVE_CHATS:
-                await update.message.reply_text("⚠️ **You aren't in any connection rn.**", parse_mode='Markdown')
+                await update.message.reply_text("⚠️ **You aren't in a chat right now.**\n\n💡 Use `/search` to find someone to talk to!", parse_mode='Markdown')
             else:
                 await stop_chat(update, context)
             return
 
         if cmd == "/next": 
-            # 1. Logic: Works exactly like the button (Ends chat -> Starts Search)
-            await stop_chat(update, context, is_next=True)
+            if user_id not in ACTIVE_CHATS:
+                await update.message.reply_text("⚠️ **You aren't in a chat right now.**\n\n💡 Use `/search` to start matching!", parse_mode='Markdown')
+            else:
+                await stop_chat(update, context, is_next=True)
             return
         
         # Admin Commands
@@ -1410,5 +1411,5 @@ if __name__ == '__main__':
         app.add_handler(MessageReactionHandler(handle_reaction))
         app.add_handler(MessageHandler(filters.ALL, relay_message))
         
-        print("🤖 PHASE 21 BOT LIVE")
-        app.run_polling()
+        print("🤖 PHASE 22 BOT LIVE")
+        app.run_polling(allowed_updates=["message", "callback_query", "message_reaction"])
