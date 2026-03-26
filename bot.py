@@ -37,9 +37,9 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 # 🚀 HIGH-PERFORMANCE ENGINE (RAM Cache & Connection Pool)
 # ==============================================================================
 # Replace these strings with real file_ids later from your Render Logs!
-DEFAULT_MALE = AgACAgUAAxkBAAIDbWnFVLX6LjG374-RxzYj_EdXsCjrAAJyDWsbQK0xVsZVFy9b3aYnAQADAgADeAADOgQ
-DEFAULT_FEMALE = AgACAgUAAxkBAAIDdWnFXghImuyxdLW8-iIJEp1kwHAdAAKNDWsbQK0xVuqb4eiaOzUOAQADAgADeAADOgQ
-DEFAULT_OTHER = AgACAgUAAxkBAAIDemnFXpBYUU0YQkeTclrszyDczqUoAAKODWsbQK0xVhTsjry1NYnTAQADAgADeAADOgQ
+DEFAULT_MALE = "AgACAgUAAxkBAAIDbWnFVLX6LjG374-RxzYj_EdXsCjrAAJyDWsbQK0xVsZVFy9b3aYnAQADAgADeAADOgQ"
+DEFAULT_FEMALE = "AgACAgUAAxkBAAIDdWnFXghImuyxdLW8-iIJEp1kwHAdAAKNDWsbQK0xVuqb4eiaOzUOAQADAgADeAADOgQ"
+DEFAULT_OTHER = "AgACAgUAAxkBAAIDemnFXpBYUU0YQkeTclrszyDczqUoAAKODWsbQK0xVhTsjry1NYnTAQADAgADeAADOgQ"
 
 ACTIVE_CHATS = {} 
 MESSAGE_MAP = {}
