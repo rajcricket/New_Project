@@ -391,7 +391,9 @@ async def admin_broadcast_execute(update: Update, context: ContextTypes.DEFAULT_
     users = cur.fetchall(); cur.close(); release_conn(conn)
     await update.message.reply_text(f"📢 Sending to {len(users)} users...")
     for u in users:
-        try: await context.bot.send_message(u[0], f"📢 **ANNOUNCEMENT:**\n\n{msg}", parse_mode='Markdown')
+        try: 
+            await context.bot.send_message(u[0], f"📢 **ANNOUNCEMENT:**\n\n{msg}", parse_mode='Markdown')
+            await asyncio.sleep(0.05) # 🛡️ RATE LIMIT PROTECTION
         except: pass
     await update.message.reply_text("✅ Broadcast done.")
 
@@ -440,10 +442,10 @@ async def send_onboarding_step(update, step):
         msg = "6️⃣ **Interests**\n\nType keywords (e.g., *Music, Movies,kdrama..*) or click Skip."
         kb = [[InlineKeyboardButton("⏭️ Skip to Name", callback_data="onboarding_step_7")]]
     elif step == 7:
-        msg = "7️⃣ **What's your Nickname?**\n\nType a cool nickname to be shown on your profile card."
+        msg = "7️⃣ **What's your Nickname?**\n\nType a cool nickname (onii-chan, kotone) for your profile."
         kb = [[InlineKeyboardButton("⏭️ Skip (Use 'Anon')", callback_data="onboarding_step_8")]]
     elif step == 8:
-        msg = "8️⃣ **Final Step! Vibe Avatar** 📸\n\nSend a cool image (Ghibli, Anime, Vector) to represent you. \n\n⚠️ *NO Real Faces or NSFW! Violators will be permanently banned.*"
+        msg = "8️⃣ **Final Step! Vibe Avatar** 📸\n\nSend a cool animated image (your Ghibli, Anime,cartoon Avatar) to represent you. \n\n⚠️ *Do Not Post Real Faces or NSFW! Violators will be permanently banned.*"
         kb = [[InlineKeyboardButton("⏭️ Skip (Use Default)", callback_data="onboarding_done")]]
 
     try:
@@ -979,6 +981,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "set_mood_menu": await send_onboarding_step(update, 5); return
     if data == "close_settings": await q.delete_message(); return
     
+    if data.startswith("set_gen_"): await update_user(uid, "gender", data.split("_")[2]); await send_onboarding_step(update, 2); return
+    if data.startswith("set_age_"): await update_user(uid, "age_range", data.split("_")[2]); await send_onboarding_step(update, 3); return
+    if data.startswith("set_lang_"): await update_user(uid, "language", data.split("_")[2]); await send_onboarding_step(update, 4); return
+    if data.startswith("set_reg_"): await update_user(uid, "region", data.split("_")[2]); await send_onboarding_step(update, 5); return
     if data.startswith("set_mood_"): await update_user(uid, "mood", data.split("_")[2]); context.user_data["state"] = "ONBOARDING_INTEREST"; await send_onboarding_step(update, 6); return
     if data == "onboarding_step_7": context.user_data["state"] = "ONBOARDING_NICKNAME"; await send_onboarding_step(update, 7); return
     if data == "onboarding_step_8": context.user_data["state"] = "ONBOARDING_AVATAR"; await send_onboarding_step(update, 8); return
@@ -1047,46 +1053,164 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try: await q.edit_message_text(f"🔨 Banned User {target_id} for 24h.")
                 except: pass
             return
-        if data in ["admin_broadcast_info", "admin_users", "admin_reports", "admin_feedbacks", "admin_banlist"]:
-            conn = get_conn(); cur = conn.cursor()
-            text = "👮 **ADMIN MENU**\n━━━━━━━━━━━━━━━━\n\n"
-            
-            if data == "admin_broadcast_info":
-                text += "📢 **How to Broadcast:**\nType `/broadcast Your Message Here` in the chat. It will instantly send your message to ALL registered users."
-            
-            elif data == "admin_users":
-                cur.execute("SELECT user_id, nickname, joined_at FROM users ORDER BY joined_at DESC LIMIT 10")
-                rows = cur.fetchall()
-                text += "📜 **10 Newest Users:**\n"
-                for r in rows: text += f"• `{r[0]}` - {r[1]} ({r[2].strftime('%b %d')})\n"
-                
-            elif data == "admin_reports":
-                cur.execute("SELECT user_id, nickname, report_count FROM users WHERE report_count > 0 ORDER BY report_count DESC LIMIT 10")
-                rows = cur.fetchall()
-                text += "⚠️ **Most Reported Users:**\n"
-                if not rows: text += "No reports yet! 🎉\n"
-                for r in rows: text += f"• `{r[0]}` - {r[1]} (🚨 {r[2]} reports)\n"
-                
-            elif data == "admin_feedbacks":
-                cur.execute("SELECT user_id, message, timestamp FROM feedback ORDER BY timestamp DESC LIMIT 5")
-                rows = cur.fetchall()
-                text += "📨 **Latest Feedback:**\n"
-                if not rows: text += "No feedback yet!\n"
-                for r in rows: text += f"• `{r[0]}`: {r[1]}\n"
-                
-            elif data == "admin_banlist":
-                cur.execute("SELECT user_id, nickname, banned_until FROM users WHERE banned_until > NOW() ORDER BY banned_until DESC LIMIT 10")
-                rows = cur.fetchall()
-                text += "🚫 **Currently Banned:**\n"
-                if not rows: text += "No active bans! 😇\n"
-                for r in rows: text += f"• `{r[0]}` - {r[1]} (Until {r[2].strftime('%b %d, %H:%M')})\n"
-
-            cur.close(); release_conn(conn)
-            
+# --- 1. BROADCAST INFO ---
+        if data == "admin_broadcast_info":
+            text = "📢 **How to Broadcast:**\nType `/broadcast Your Message Here` in the chat. It will instantly send your message to ALL registered users."
             kb = [[InlineKeyboardButton("🔙 Back to Control Room", callback_data="admin_home")]]
             try: await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
             except: 
                 try: await q.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+                except: pass
+            return
+
+        # --- 2. RECENT USERS ---
+        if data == "admin_users":
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("SELECT user_id, nickname, first_name, joined_at FROM users ORDER BY joined_at DESC LIMIT 15")
+            rows = cur.fetchall(); cur.close(); release_conn(conn)
+            text = "📜 **15 Newest Users:**\n━━━━━━━━━━━━━━━━\n"
+            for r in rows: text += f"• `{r[0]}` - {r[1]} ({r[2] or 'NoName'}) - {r[3].strftime('%b %d')}\n"
+            kb = [[InlineKeyboardButton("🔙 Back to Control Room", callback_data="admin_home")]]
+            try: await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+            except: 
+                try: await q.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+                except: pass
+            return
+
+        # --- 3. FEEDBACK QUEUE ---
+        if data == "admin_feedbacks":
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("SELECT f.user_id, u.nickname, f.message FROM feedback f JOIN users u ON f.user_id = u.user_id ORDER BY f.timestamp DESC LIMIT 5")
+            rows = cur.fetchall(); cur.close(); release_conn(conn)
+            text = "📨 **Latest Feedback:**\n━━━━━━━━━━━━━━━━\n"
+            if not rows: text += "No feedback right now!\n"
+            for r in rows: text += f"• `{r[0]}` ({r[1]}): {r[2]}\n\n"
+            kb = [[InlineKeyboardButton("🗑️ Clear Read Feedback", callback_data="admin_clear_feedback")],
+                  [InlineKeyboardButton("🔙 Back to Control Room", callback_data="admin_home")]]
+            try: await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+            except: 
+                try: await q.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+                except: pass
+            return
+
+        if data == "admin_clear_feedback":
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("DELETE FROM feedback")
+            conn.commit(); cur.close(); release_conn(conn)
+            await q.answer("✅ All feedback cleared!", show_alert=True)
+            kb = [[InlineKeyboardButton("🔙 Back to Control Room", callback_data="admin_home")]]
+            try: await q.edit_message_text("🗑️ Feedback cleared.", reply_markup=InlineKeyboardMarkup(kb))
+            except: 
+                try: await q.edit_message_caption(caption="🗑️ Feedback cleared.", reply_markup=InlineKeyboardMarkup(kb))
+                except: pass
+            return
+
+        # --- 4. REPORT TICKETING SYSTEM ---
+        if data == "admin_reports":
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("SELECT user_id, nickname, first_name, username, report_count FROM users WHERE report_count > 0 ORDER BY report_count DESC LIMIT 1")
+            r = cur.fetchone()
+            if not r:
+                cur.close(); release_conn(conn)
+                text = "✅ **Zero Active Reports!**\nYour community is safe."
+                kb = [[InlineKeyboardButton("🔙 Back to Control Room", callback_data="admin_home")]]
+            else:
+                user_id, nick, fname, uname, count = r
+                cur.execute("SELECT message FROM chat_logs WHERE sender_id = %s ORDER BY timestamp DESC LIMIT 5", (user_id,))
+                logs = [row[0] for row in cur.fetchall()]
+                cur.close(); release_conn(conn)
+                
+                text = f"⚠️ **REPORT TICKET**\n━━━━━━━━━━━━━━━━\n👤 **Name:** {nick} ({fname})\n🆔 **ID:** `{user_id}`\n🔗 **User:** @{uname or 'None'}\n🚨 **Reports:** {count}\n\n📜 **Recent Logs:**\n"
+                for log in logs: text += f"- \"{log}\"\n"
+                
+                kb = [
+                    [InlineKeyboardButton("🔨 Ban (24h)", callback_data=f"admin_rep_ban_{user_id}"), InlineKeyboardButton("⚠️ Warn", callback_data=f"admin_rep_warn_{user_id}")],
+                    [InlineKeyboardButton("✅ Spare (Reset)", callback_data=f"admin_rep_spare_{user_id}")],
+                    [InlineKeyboardButton("🔙 Back to Control Room", callback_data="admin_home")]
+                ]
+            try: await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+            except: 
+                try: await q.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+                except: pass
+            return
+
+        if data.startswith("admin_rep_ban_"):
+            target_id = int(data.split("_")[3])
+            conn = get_conn(); cur = conn.cursor()
+            ban_until = datetime.datetime.now() + datetime.timedelta(hours=24)
+            cur.execute("UPDATE users SET banned_until = %s, report_count = 0 WHERE user_id = %s", (ban_until, target_id))
+            conn.commit(); cur.close(); release_conn(conn)
+            if target_id in ACTIVE_CHATS: del ACTIVE_CHATS[target_id]
+            try: await context.bot.send_message(target_id, "🚫 You have been BANNED by an admin for 24 hours.", reply_markup=ReplyKeyboardRemove())
+            except: pass
+            await q.answer("✅ Banned & cleared report.", show_alert=True)
+            kb = [[InlineKeyboardButton("⏭️ Next Report", callback_data="admin_reports")], [InlineKeyboardButton("🔙 Back to Control Room", callback_data="admin_home")]]
+            try: await q.edit_message_text("🔨 User banned for 24h. Load next?", reply_markup=InlineKeyboardMarkup(kb))
+            except: 
+                try: await q.edit_message_caption(caption="🔨 User banned for 24h. Load next?", reply_markup=InlineKeyboardMarkup(kb))
+                except: pass
+            return
+
+        if data.startswith("admin_rep_warn_"):
+            target_id = int(data.split("_")[3])
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("UPDATE users SET report_count = 0 WHERE user_id = %s", (target_id,))
+            conn.commit(); cur.close(); release_conn(conn)
+            try: await context.bot.send_message(target_id, "⚠️ **OFFICIAL WARNING**\nYour recent behavior was reported. Please follow the guidelines or face a ban.", parse_mode='Markdown')
+            except: pass
+            await q.answer("✅ Warned & cleared report.", show_alert=True)
+            kb = [[InlineKeyboardButton("⏭️ Next Report", callback_data="admin_reports")], [InlineKeyboardButton("🔙 Back to Control Room", callback_data="admin_home")]]
+            try: await q.edit_message_text("⚠️ Warning sent! Load next?", reply_markup=InlineKeyboardMarkup(kb))
+            except: 
+                try: await q.edit_message_caption(caption="⚠️ Warning sent! Load next?", reply_markup=InlineKeyboardMarkup(kb))
+                except: pass
+            return
+            
+        if data.startswith("admin_rep_spare_"):
+            target_id = int(data.split("_")[3])
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("UPDATE users SET report_count = 0 WHERE user_id = %s", (target_id,))
+            conn.commit(); cur.close(); release_conn(conn)
+            await q.answer("✅ Spared & cleared report.", show_alert=True)
+            kb = [[InlineKeyboardButton("⏭️ Next Report", callback_data="admin_reports")], [InlineKeyboardButton("🔙 Back to Control Room", callback_data="admin_home")]]
+            try: await q.edit_message_text("✅ User spared! Load next?", reply_markup=InlineKeyboardMarkup(kb))
+            except: 
+                try: await q.edit_message_caption(caption="✅ User spared! Load next?", reply_markup=InlineKeyboardMarkup(kb))
+                except: pass
+            return
+
+        # --- 5. BAN MANAGEMENT ---
+        if data == "admin_banlist":
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("SELECT user_id, nickname FROM users WHERE banned_until > NOW() ORDER BY banned_until DESC LIMIT 10")
+            rows = cur.fetchall(); cur.close(); release_conn(conn)
+            text = "🚫 **Currently Banned:**\n━━━━━━━━━━━━━━━━\n"
+            kb = []
+            if not rows: text += "No active bans! 😇\n"
+            else:
+                for r in rows: 
+                    text += f"• `{r[0]}` - {r[1]}\n"
+                    kb.append([InlineKeyboardButton(f"🔓 Unban {r[1][:10]}", callback_data=f"admin_unban_{r[0]}")])
+            kb.append([InlineKeyboardButton("🔙 Back to Control Room", callback_data="admin_home")])
+            
+            try: await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+            except: 
+                try: await q.edit_message_caption(caption=text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+                except: pass
+            return
+
+        if data.startswith("admin_unban_"):
+            target_id = int(data.split("_")[2])
+            conn = get_conn(); cur = conn.cursor()
+            cur.execute("UPDATE users SET banned_until = NULL WHERE user_id = %s", (target_id,))
+            conn.commit(); cur.close(); release_conn(conn)
+            try: await context.bot.send_message(target_id, "🔓 **YOUR BAN HAS BEEN LIFTED.**\n\nPlease ensure you follow the community guidelines. Any future violations will result in a permanent ban.", parse_mode='Markdown')
+            except: pass
+            await q.answer("✅ User Unbanned!", show_alert=True)
+            kb = [[InlineKeyboardButton("🔄 Refresh Banlist", callback_data="admin_banlist")], [InlineKeyboardButton("🔙 Back to Control Room", callback_data="admin_home")]]
+            try: await q.edit_message_text(f"✅ User `{target_id}` unbanned successfully.", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+            except: 
+                try: await q.edit_message_caption(caption=f"✅ User `{target_id}` unbanned successfully.", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
                 except: pass
             return
     if data.startswith("rate_"):
