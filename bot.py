@@ -1239,6 +1239,149 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 try: await q.edit_message_caption(caption=f"✅ User `{target_id}` unbanned successfully.", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
                 except: pass
             return
+    # --- GAME ENGINE & NOTIFICATIONS ---
+    if data == "notify_me":
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("UPDATE users SET status = 'waiting_notify' WHERE user_id = %s", (uid,))
+        conn.commit(); cur.close(); release_conn(conn)
+        await q.edit_message_text(get_text(l, "WAIT_NOTIFY"), parse_mode='Markdown')
+        await show_main_menu(update); return
+
+    if data == "keep_searching": await q.delete_message(); return
+        
+    if data.startswith("game_offer_"): await offer_game(update, context, uid, data.split("_", 2)[2]); return
+    if data.startswith("game_accept_"): pid = ACTIVE_CHATS.get(uid); await start_game_session(update, context, data.split("_", 2)[2], pid, uid) if pid else None; return
+    if data == "game_reject": 
+        pid = ACTIVE_CHATS.get(uid)
+        if pid: 
+            p_lang = await get_lang(pid)
+            await context.bot.send_message(pid, get_text(p_lang, "DECLINED"))
+        await q.edit_message_text(get_text(l, "DECLINED")); return
+    
+    if data.startswith("tod_pick_"):
+        mode = data.split("_")[2] 
+        await q.edit_message_text(get_text(l, "YOU_PICKED").format(mode=mode.upper()), parse_mode='Markdown')
+        partner_id = ACTIVE_CHATS.get(uid)
+        if partner_id: await send_tod_options(context, partner_id, mode)
+        return
+    
+    if data.startswith("tod_send_"): 
+        gd = GAME_STATES.get(uid)
+        if gd:
+            q_text = gd["options"][int(data.split("_")[2])]
+            pid = ACTIVE_CHATS.get(uid) 
+            if pid:
+                p_lang = await get_lang(pid)
+                await context.bot.send_message(pid, get_text(p_lang, "QUESTION").format(q=q_text), parse_mode='Markdown')
+                await q.edit_message_text(get_text(l, "ASKED").format(q=q_text))
+                if pid in GAME_STATES: 
+                    GAME_STATES[pid]["status"] = "answering"; GAME_STATES[pid]["turn"] = pid 
+        return
+        
+    if data == "tod_manual": context.user_data["state"] = "GAME_MANUAL"; await q.edit_message_text(get_text(l, "TYPE_Q_NOW")); return
+
+    if data.startswith("rps_"):
+        move = data.split("_")[1]
+        gd = GAME_STATES.get(uid)
+        if not gd: return
+        gd["moves"][uid] = move
+        await q.edit_message_text(get_text(l, "CHOSE").format(move=move.upper()))
+        
+        partner_id = ACTIVE_CHATS.get(uid)
+        if partner_id and partner_id in gd["moves"]:
+            p_move = gd["moves"][partner_id]
+            p_lang = await get_lang(partner_id)
+            winner = None
+            
+            if move == p_move: winner = None
+            elif (move == "rock" and p_move == "scissors") or (move == "paper" and p_move == "rock") or (move == "scissors" and p_move == "paper"): winner = uid
+            else: winner = partner_id
+
+            if winner == uid: gd[f"s_{uid}"] = gd.get(f"s_{uid}", 0) + 1
+            elif winner == partner_id: gd[f"s_{partner_id}"] = gd.get(f"s_{partner_id}", 0) + 1
+            
+            sc_me, sc_pa = gd.get(f"s_{uid}", 0), gd.get(f"s_{partner_id}", 0)
+            
+            if gd["cur_r"] >= gd["max_r"]:
+                final_res = get_text(l, "DRAW_MATCH"); p_final = get_text(p_lang, "DRAW_MATCH")
+                if sc_me > sc_pa: final_res = get_text(l, "WON_MATCH"); p_final = get_text(p_lang, "LOST_MATCH")
+                elif sc_pa > sc_me: final_res = get_text(l, "LOST_MATCH"); p_final = get_text(p_lang, "WON_MATCH")
+                
+                msg = get_text(l, "RPS_FINAL").format(max_r=gd['max_r'], s1=sc_me, s2=sc_pa, res=final_res)
+                p_msg = get_text(p_lang, "RPS_FINAL").format(max_r=gd['max_r'], s1=sc_pa, s2=sc_me, res=p_final)
+                
+                await context.bot.send_message(uid, msg, parse_mode='Markdown', reply_markup=get_keyboard_game(l))
+                await context.bot.send_message(partner_id, p_msg, parse_mode='Markdown', reply_markup=get_keyboard_game(p_lang))
+                gd["moves"] = {}; del GAME_STATES[uid]; del GAME_STATES[partner_id]
+            else:
+                r_res = get_text(l, "DRAW"); p_r_res = get_text(p_lang, "DRAW")
+                if winner == uid:
+                    r_res = get_text(l, "BEAT").format(m1=move.upper(), m2=p_move.upper())
+                    p_r_res = get_text(p_lang, "LOST").format(m1=p_move.upper(), m2=move.upper())
+                elif winner == partner_id:
+                    r_res = get_text(l, "LOST").format(m1=move.upper(), m2=p_move.upper())
+                    p_r_res = get_text(p_lang, "BEAT").format(m1=p_move.upper(), m2=move.upper())
+                
+                msg = get_text(l, "RPS_RES").format(r=gd['cur_r'], res=r_res, s1=sc_me, s2=sc_pa)
+                p_msg = get_text(p_lang, "RPS_RES").format(r=gd['cur_r'], res=p_r_res, s1=sc_pa, s2=sc_me)
+
+                await context.bot.send_message(uid, msg, parse_mode='Markdown')
+                await context.bot.send_message(partner_id, p_msg, parse_mode='Markdown')
+                gd["cur_r"] += 1; gd["moves"] = {}
+                await asyncio.sleep(2)
+                await send_rps_round(context, uid, partner_id)
+        return
+
+    if data.startswith("wyr_") and data != "wyr_skip":
+        choice = data.split("_")[1].upper()
+        gd = GAME_STATES.get(uid)
+        if not gd: return
+        gd["moves"][uid] = choice
+        await q.edit_message_text(get_text(l, "VOTED").format(choice=choice))
+        
+        partner_id = ACTIVE_CHATS.get(uid)
+        if partner_id and partner_id in gd["moves"]:
+            p_choice = gd["moves"][partner_id]
+            p_lang = await get_lang(partner_id)
+            
+            match_text, p_match_text = "", ""
+            if choice == p_choice:
+                gd["streak"] = gd.get("streak", 0) + 1; s = gd["streak"]
+                match_text = get_text(l, "MATCH_100").format(s=s); p_match_text = get_text(p_lang, "MATCH_100").format(s=s)
+            else:
+                gd["streak"] = 0
+                match_text = get_text(l, "MATCH_DIFF"); p_match_text = get_text(p_lang, "MATCH_DIFF")
+
+            msg = get_text(l, "WYR_RESULTS").format(my_choice=choice, p_choice=p_choice, match=match_text)
+            p_msg = get_text(p_lang, "WYR_RESULTS").format(my_choice=p_choice, p_choice=choice, match=p_match_text)
+            gd["status"] = "discussing"; gd["explained"] = [] 
+            
+            kb = [[InlineKeyboardButton(get_text(l, "SKIP_DISC"), callback_data="wyr_skip")]]
+            p_kb = [[InlineKeyboardButton(get_text(p_lang, "SKIP_DISC"), callback_data="wyr_skip")]]
+            
+            await context.bot.send_message(uid, msg, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(kb))
+            await context.bot.send_message(partner_id, p_msg, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(p_kb))
+            gd["moves"] = {}
+        return
+    
+    if data == "wyr_skip":
+        gd = GAME_STATES.get(uid); pid = ACTIVE_CHATS.get(uid)
+        if gd and gd.get("status") == "discussing":
+            if "explained" not in gd: gd["explained"] = []
+            if uid not in gd["explained"]:
+                gd["explained"].append(uid)
+                await q.edit_message_text(get_text(l, "YOU_SKIPPED"))
+                if pid: await context.bot.send_message(pid, get_text(await get_lang(pid), "PARTNER_SKIPPED"))
+            else:
+                await q.answer("⏳", show_alert=True); return
+
+            if len(gd["explained"]) >= 2:
+                if pid: await context.bot.send_message(pid, get_text(await get_lang(pid), "NEXT_ROUND"))
+                await context.bot.send_message(uid, get_text(l, "NEXT_ROUND"))
+                gd["status"] = "playing"
+                await asyncio.sleep(1.5)
+                if pid: await send_wyr_round(context, uid, pid)
+        return
     if data.startswith("rate_"):
         parts = data.split("_"); act = parts[1]; target_str = parts[2]
         if target_str == "AI": await q.edit_message_text("✅"); return
@@ -1275,5 +1418,5 @@ if __name__ == '__main__':
         app.add_handler(MessageReactionHandler(handle_reaction))
         app.add_handler(MessageHandler(filters.ALL, relay_message))
         
-        print("🤖 PHASE 24 BOT LIVE - AVATARS & TRADING CARDS")
+        print("🤖 PHASE 25 BOT LIVE - AVATARS & TRADING CARDS")
         app.run_polling(allowed_updates=["message", "callback_query", "message_reaction"])
