@@ -1361,17 +1361,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if gd["cur_r"] >= gd["max_r"]:
                 final_res = get_text(l, "DRAW_MATCH"); p_final = get_text(p_lang, "DRAW_MATCH")
-                if sc_me != sc_pa:
-                    is_spicy = gd.get("spicy", False)
-                    dare_list = GAME_DATA["tod_dare_spicy"] if is_spicy else GAME_DATA["tod_dare"]
-                    random_dare = random.choice(dare_list)
-                    
-                    if sc_me > sc_pa:
-                        final_res = get_text(l, "WON_MATCH").format(dare=random_dare)
-                        p_final = get_text(p_lang, "LOST_MATCH").format(dare=random_dare)
-                    elif sc_pa > sc_me:
-                        final_res = get_text(l, "LOST_MATCH").format(dare=random_dare)
-                        p_final = get_text(p_lang, "WON_MATCH").format(dare=random_dare)
+                if sc_me > sc_pa: final_res = get_text(l, "WON_MATCH"); p_final = get_text(p_lang, "LOST_MATCH")
+                elif sc_pa > sc_me: final_res = get_text(l, "LOST_MATCH"); p_final = get_text(p_lang, "WON_MATCH")
                 
                 msg = get_text(l, "RPS_FINAL").format(max_r=gd['max_r'], s1=sc_me, s2=sc_pa, res=final_res)
                 p_msg = get_text(p_lang, "RPS_FINAL").format(max_r=gd['max_r'], s1=sc_pa, s2=sc_me, res=p_final)
