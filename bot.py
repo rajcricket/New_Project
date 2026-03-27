@@ -67,16 +67,42 @@ def release_conn(conn):
     if DB_POOL and conn: DB_POOL.putconn(conn)
 
 async def get_lang(user_id):
+    # 1. Instant RAM check (Fastest)
     if user_id in USER_LANGS: return USER_LANGS[user_id]
-    conn = get_conn()
-    if not conn: return "English"
-    cur = conn.cursor()
-    cur.execute("SELECT language FROM users WHERE user_id = %s", (user_id,))
-    row = cur.fetchone()
-    cur.close(); release_conn(conn)
-    lang = row[0] if row else "English"
-    USER_LANGS[user_id] = lang
-    return lang
+    
+    # 2. Database check with a 2-attempt Auto-Retry loop
+    for attempt in range(2): 
+        conn = get_conn()
+        if not conn: return "English"
+        
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT language FROM users WHERE user_id = %s", (user_id,))
+            row = cur.fetchone()
+            cur.close()
+            release_conn(conn) # Put healthy connection back in pool
+            
+            lang = row[0] if row else "English"
+            USER_LANGS[user_id] = lang
+            return lang
+            
+        except psycopg2.OperationalError as e:
+            # 🚨 STALE CONNECTION DETECTED!
+            print(f"⚠️ Stale connection caught (Attempt {attempt+1}). Reconnecting...")
+            if conn:
+                try: 
+                    # 🗑️ Throw away the dead connection permanently
+                    DB_POOL.putconn(conn, close=True) 
+                except: pass
+                
+        except Exception as e:
+            # Catch other random database errors safely
+            print(f"❌ DB Error: {e}")
+            if conn: release_conn(conn)
+            return "English"
+
+    # 3. Ultimate Failsafe if the database is completely down
+    return "English"
 
 # ==============================================================================
 # ❤️ THE HEARTBEAT
