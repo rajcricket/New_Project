@@ -44,7 +44,8 @@ DEFAULT_OTHER = "AgACAgUAAxkBAAIDemnFXpBYUU0YQkeTclrszyDczqUoAAKODWsbQK0xVhTsjry
 ACTIVE_CHATS = {} 
 MESSAGE_MAP = {}
 GAME_STATES = {}       
-GAME_COOLDOWNS = {}    
+GAME_COOLDOWNS = {}
+SPICY_COOLDOWNS = {}
 USER_LANGS = {}
 
 DB_POOL = None
@@ -185,8 +186,12 @@ def get_keyboard_chat(lang="English"):
         [KeyboardButton(get_text(lang, "BTN_STOP")), KeyboardButton(get_text(lang, "BTN_NEXT"))]
     ], resize_keyboard=True)
 
-def get_keyboard_game(lang="English"):
-    return ReplyKeyboardMarkup([[KeyboardButton(get_text(lang, "BTN_STOP_CHAT")), KeyboardButton(get_text(lang, "BTN_STOP_GAME"))]], resize_keyboard=True)
+def get_keyboard_game(lang="English", is_spicy=False):
+    spicy_btn = KeyboardButton(get_text(lang, "BTN_SPICY_OFF")) if is_spicy else KeyboardButton(get_text(lang, "BTN_SPICY_ON"))
+    return ReplyKeyboardMarkup([
+        [KeyboardButton(get_text(lang, "BTN_STOP_CHAT")), KeyboardButton(get_text(lang, "BTN_STOP_GAME"))],
+        [spicy_btn]
+    ], resize_keyboard=True)
 
 # ==============================================================================
 # 🧠 MATCHMAKING ENGINE
@@ -276,7 +281,7 @@ async def start_game_session(update, context, game_raw, p1, p2):
         game_name = "Rock Paper Scissors"
         rounds = int(game_raw.split("|")[1])
 
-    state = {"game": game_name, "turn": p2, "partner": p2, "status": "playing", "moves": {}, "max_r": rounds, "cur_r": 1, "s1": 0, "s2": 0, "streak": 0, "explained": [], "used_q": []}
+    state = {"game": game_name, "turn": p2, "partner": p2, "status": "playing", "moves": {}, "max_r": rounds, "cur_r": 1, "s1": 0, "s2": 0, "streak": 0, "explained": [], "used_q": [], "spicy": False}
     GAME_STATES[p1] = GAME_STATES[p2] = state
     
     l1 = await get_lang(p1); l2 = await get_lang(p2)
@@ -294,8 +299,15 @@ async def send_tod_turn(context, turn_id):
 
 async def send_tod_options(context, target_id, mode):
     l = await get_lang(target_id)
-    options = random.sample(GAME_DATA[f"tod_{mode}"], 5)
-    msg_text = get_text(l, "PICK_A").format(mode=mode.upper())
+    gd = GAME_STATES.get(target_id, {})
+    is_spicy = gd.get("spicy", False)
+    
+    list_key = f"tod_{mode}_spicy" if is_spicy else f"tod_{mode}"
+    if list_key not in GAME_DATA or not GAME_DATA[list_key]: list_key = f"tod_{mode}" # Fallback
+        
+    options = random.sample(GAME_DATA[list_key], min(5, len(GAME_DATA[list_key])))
+    prefix = get_text(l, "SPICY_PREFIX") if is_spicy else ""
+    msg_text = prefix + get_text(l, "PICK_A").format(mode=mode.upper())
     for i, opt in enumerate(options): msg_text += f"**{i+1}.** {opt}\n"
     
     kb = [[InlineKeyboardButton("1️⃣", callback_data="tod_send_0"), InlineKeyboardButton("2️⃣", callback_data="tod_send_1"), InlineKeyboardButton("3️⃣", callback_data="tod_send_2")],
@@ -310,37 +322,31 @@ async def send_wyr_round(context, p1, p2):
     gd = GAME_STATES.get(p1)
     if not gd: return
 
-    total_options = len(GAME_DATA["wyr"])
+    is_spicy = gd.get("spicy", False)
+    list_key = "wyr_spicy" if is_spicy else "wyr"
+    if list_key not in GAME_DATA or not GAME_DATA[list_key]: list_key = "wyr" # Fallback
+
+    total_options = len(GAME_DATA[list_key])
     used_indices = gd.get("used_q", [])
 
-    if len(used_indices) >= total_options:
-        used_indices = []
+    if len(used_indices) >= total_options: used_indices = []
     
     available = [i for i in range(total_options) if i not in used_indices]
     selected_index = random.choice(available)
     gd["used_q"] = used_indices + [selected_index]
     
-    q = GAME_DATA["wyr"][selected_index]
+    q = GAME_DATA[list_key][selected_index]
     
-    l1 = await get_lang(p1)
-    l2 = await get_lang(p2)
+    l1 = await get_lang(p1); l2 = await get_lang(p2)
+    prefix1 = get_text(l1, "SPICY_PREFIX") if is_spicy else ""
+    prefix2 = get_text(l2, "SPICY_PREFIX") if is_spicy else ""
     
-    msg1 = get_text(l1, "WYR_Q").format(q1=q[0], q2=q[1])
-    msg2 = get_text(l2, "WYR_Q").format(q1=q[0], q2=q[1])
+    msg1 = prefix1 + get_text(l1, "WYR_Q").format(q1=q[0], q2=q[1])
+    msg2 = prefix2 + get_text(l2, "WYR_Q").format(q1=q[0], q2=q[1])
     
-    kb = [
-        [InlineKeyboardButton("🅰️ A", callback_data="wyr_a")],
-        [InlineKeyboardButton("🅱️ B", callback_data="wyr_b")]
-    ]
-    
+    kb = [[InlineKeyboardButton("🅰️ A", callback_data="wyr_a")], [InlineKeyboardButton("🅱️ B", callback_data="wyr_b")]]
     await context.bot.send_message(p1, msg1, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
     await context.bot.send_message(p2, msg2, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
-
-async def send_rps_round(context, p1, p2):
-    kb = [[InlineKeyboardButton("🪨", callback_data="rps_rock"), InlineKeyboardButton("📄", callback_data="rps_paper"), InlineKeyboardButton("✂️", callback_data="rps_scissors")]]
-    l1 = await get_lang(p1); l2 = await get_lang(p2)
-    await context.bot.send_message(p1, get_text(l1, "SHOOT"), reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
-    await context.bot.send_message(p2, get_text(l2, "SHOOT"), reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 # ==============================================================================
 # 👮 ADMIN SYSTEM 
@@ -865,6 +871,33 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in [x["HELP"] for x in locale_data.TEXTS.values()]: await help_command(update, context); return
 
     all_stops = [x["BTN_STOP"] for x in locale_data.TEXTS.values()] + [x["BTN_STOP_CHAT"] for x in locale_data.TEXTS.values()]
+    if text in [x.get("BTN_SPICY_ON", "🌶️ Spicy Mode") for x in locale_data.TEXTS.values()] or text == "🌶️ Spicy Mode":
+        pid = ACTIVE_CHATS.get(user_id)
+        if not pid or isinstance(pid, str): return
+        
+        last = SPICY_COOLDOWNS.get(user_id, 0)
+        if time.time() - last < 60:
+            await update.message.reply_text(get_text(l, "SPICY_COOLDOWN").format(seconds=int(60 - (time.time() - last))))
+            return
+        SPICY_COOLDOWNS[user_id] = time.time()
+        
+        p_lang = await get_lang(pid)
+        kb = [[InlineKeyboardButton(get_text(p_lang, "SPICY_ACCEPTED"), callback_data="spicy_accept"),
+               InlineKeyboardButton(get_text(p_lang, "SPICY_REJECTED"), callback_data="spicy_reject")]]
+        await context.bot.send_message(pid, get_text(p_lang, "SPICY_REQ"), reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        await update.message.reply_text("⏳ Request sent to partner...")
+        return
+
+    if text in [x.get("BTN_SPICY_OFF", "🧊 Turn off Spicy Mode") for x in locale_data.TEXTS.values()] or text == "🧊 Turn off Spicy Mode":
+        pid = ACTIVE_CHATS.get(user_id)
+        if user_id in GAME_STATES: GAME_STATES[user_id]["spicy"] = False
+        if pid and pid in GAME_STATES: GAME_STATES[pid]["spicy"] = False
+        
+        await update.message.reply_text(get_text(l, "SPICY_DEACTIVATED_MSG"), reply_markup=get_keyboard_game(l, False), parse_mode='Markdown')
+        if pid:
+            p_lang = await get_lang(pid)
+            await context.bot.send_message(pid, get_text(p_lang, "SPICY_DEACTIVATED_MSG"), reply_markup=get_keyboard_game(p_lang, False), parse_mode='Markdown')
+        return
     if text in all_stops or text == "🛑 Stop": await stop_chat(update, context); return
     if text in [x["BTN_NEXT"] for x in locale_data.TEXTS.values()] or text == "⏭️ Next": await stop_chat(update, context, is_next=True); return
     
@@ -1248,6 +1281,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_main_menu(update); return
 
     if data == "keep_searching": await q.delete_message(); return
+    if data == "spicy_accept":
+        pid = ACTIVE_CHATS.get(uid)
+        if uid in GAME_STATES: GAME_STATES[uid]["spicy"] = True
+        if pid and pid in GAME_STATES: GAME_STATES[pid]["spicy"] = True
+        
+        await q.delete_message()
+        await context.bot.send_message(uid, get_text(l, "SPICY_ACTIVATED_MSG"), reply_markup=get_keyboard_game(l, True), parse_mode='Markdown')
+        if pid:
+            p_lang = await get_lang(pid)
+            await context.bot.send_message(pid, get_text(p_lang, "SPICY_ACTIVATED_MSG"), reply_markup=get_keyboard_game(p_lang, True), parse_mode='Markdown')
+        return
+
+    if data == "spicy_reject":
+        await q.delete_message()
+        pid = ACTIVE_CHATS.get(uid)
+        if pid:
+            p_lang = await get_lang(pid)
+            await context.bot.send_message(pid, get_text(p_lang, "SPICY_DECLINED_MSG"))
+        return
         
     if data.startswith("game_offer_"): await offer_game(update, context, uid, data.split("_", 2)[2]); return
     if data.startswith("game_accept_"): pid = ACTIVE_CHATS.get(uid); await start_game_session(update, context, data.split("_", 2)[2], pid, uid) if pid else None; return
