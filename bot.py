@@ -1360,15 +1360,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sc_me, sc_pa = gd.get(f"s_{uid}", 0), gd.get(f"s_{partner_id}", 0)
             
             if gd["cur_r"] >= gd["max_r"]:
-                final_res = get_text(l, "DRAW_MATCH"); p_final = get_text(p_lang, "DRAW_MATCH")
-                if sc_me > sc_pa: final_res = get_text(l, "WON_MATCH"); p_final = get_text(p_lang, "LOST_MATCH")
-                elif sc_pa > sc_me: final_res = get_text(l, "LOST_MATCH"); p_final = get_text(p_lang, "WON_MATCH")
+                is_spicy = gd.get("spicy", False)
+                list_key = "tod_dare_spicy" if is_spicy else "tod_dare"
+                chosen_dare = random.choice(GAME_DATA.get(list_key, ["Send a voice note howling like a wolf!"]))
+                
+                final_res = get_text(l, "DRAW_MATCH") + get_text(l, "RPS_DRAW_NO_DARE")
+                p_final = get_text(p_lang, "DRAW_MATCH") + get_text(p_lang, "RPS_DRAW_NO_DARE")
+                
+                if sc_me > sc_pa: 
+                    final_res = get_text(l, "WON_MATCH") + get_text(l, "RPS_WIN_DARE").format(dare=chosen_dare)
+                    p_final = get_text(p_lang, "LOST_MATCH") + get_text(p_lang, "RPS_LOSE_DARE").format(dare=chosen_dare)
+                elif sc_pa > sc_me: 
+                    final_res = get_text(l, "LOST_MATCH") + get_text(l, "RPS_LOSE_DARE").format(dare=chosen_dare)
+                    p_final = get_text(p_lang, "WON_MATCH") + get_text(p_lang, "RPS_WIN_DARE").format(dare=chosen_dare)
                 
                 msg = get_text(l, "RPS_FINAL").format(max_r=gd['max_r'], s1=sc_me, s2=sc_pa, res=final_res)
                 p_msg = get_text(p_lang, "RPS_FINAL").format(max_r=gd['max_r'], s1=sc_pa, s2=sc_me, res=p_final)
                 
-                await context.bot.send_message(uid, msg, parse_mode='Markdown', reply_markup=get_keyboard_game(l))
-                await context.bot.send_message(partner_id, p_msg, parse_mode='Markdown', reply_markup=get_keyboard_game(p_lang))
+                await context.bot.send_message(uid, msg, parse_mode='Markdown', reply_markup=get_keyboard_game(l, is_spicy))
+                await context.bot.send_message(partner_id, p_msg, parse_mode='Markdown', reply_markup=get_keyboard_game(p_lang, is_spicy))
                 gd["moves"] = {}; del GAME_STATES[uid]; del GAME_STATES[partner_id]
             else:
                 r_res = get_text(l, "DRAW"); p_r_res = get_text(p_lang, "DRAW")
