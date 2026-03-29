@@ -9,6 +9,7 @@ import os
 import threading
 import random  
 import time  
+import httpx
 from game_data import GAME_DATA
 from flask import Flask
 from telegram import (
@@ -28,6 +29,7 @@ from ghost_engine import GhostEngine
 # ==============================================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 admin_env = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(x) for x in admin_env.split(",") if x.strip().isdigit()]
 
@@ -46,6 +48,7 @@ MESSAGE_MAP = {}
 GAME_STATES = {}       
 GAME_COOLDOWNS = {}    
 USER_LANGS = {}
+TRANSLATE_ENABLED = set()
 
 DB_POOL = None
 GHOST = None 
@@ -103,7 +106,16 @@ async def get_lang(user_id):
 
     # 3. Ultimate Failsafe if the database is completely down
     return "English"
-
+async def translate_text(text, target_lang):
+    if not GROQ_API_KEY: return text
+    prompt = f"Translate this internet slang/chat text to {target_lang}. Reply ONLY with the translation, absolutely nothing else. Text: '{text}'"
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    payload = {"model": "llama3-8b-8192", "messages": [{"role": "user", "content": prompt}], "temperature": 0.3}
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers, timeout=4.0)
+            return resp.json()["choices"][0]["message"]["content"].strip()
+    except: return text
 # ==============================================================================
 # ❤️ THE HEARTBEAT
 # ==============================================================================
@@ -179,9 +191,10 @@ def get_keyboard_lobby(lang="English"):
 def get_keyboard_searching(lang="English"):
     return ReplyKeyboardMarkup([[KeyboardButton(get_text(lang, "STOP_SEARCH"))]], resize_keyboard=True)
 
-def get_keyboard_chat(lang="English"):
+def get_keyboard_chat(lang="English", is_translating=False):
+    trans_btn = KeyboardButton(get_text(lang, "BTN_TRANS_OFF")) if is_translating else KeyboardButton(get_text(lang, "BTN_TRANS_ON"))
     return ReplyKeyboardMarkup([
-        [KeyboardButton(get_text(lang, "BTN_GAMES"))],
+        [KeyboardButton(get_text(lang, "BTN_GAMES")), trans_btn],
         [KeyboardButton(get_text(lang, "BTN_STOP")), KeyboardButton(get_text(lang, "BTN_NEXT"))]
     ], resize_keyboard=True)
 
@@ -648,6 +661,9 @@ async def stop_chat(update, context, is_next=False):
     l = await get_lang(user_id)
     partner_id = ACTIVE_CHATS.pop(user_id, 0)
     
+    if user_id in TRANSLATE_ENABLED: TRANSLATE_ENABLED.remove(user_id)
+    if partner_id in TRANSLATE_ENABLED: TRANSLATE_ENABLED.remove(partner_id)
+    
     keys_to_remove = [k for k in MESSAGE_MAP if k[0] in (user_id, partner_id)]
     for k in keys_to_remove: del MESSAGE_MAP[k]
     if user_id in GAME_STATES: del GAME_STATES[user_id]
@@ -829,7 +845,19 @@ async def relay_message(update, context):
                             if rec_id == partner_id and snd_msg_id == update.message.reply_to_message.message_id:
                                 reply_target_id = rec_msg_id
                                 break
-                sent_msg = await update.message.copy(chat_id=partner_id, reply_to_message_id=reply_target_id)
+                
+                # --- 🔤 TRANSLATION INTERCEPT ---
+                if update.message.text and partner_id in TRANSLATE_ENABLED:
+                    p_lang = await get_lang(partner_id)
+                    translated = await translate_text(update.message.text, p_lang)
+                    if translated and translated.lower() != update.message.text.lower():
+                        final_text = f"{update.message.text}\n💬 *[{translated}]*"
+                    else:
+                        final_text = update.message.text
+                    sent_msg = await context.bot.send_message(chat_id=partner_id, text=final_text, reply_to_message_id=reply_target_id, parse_mode='Markdown')
+                else:
+                    sent_msg = await update.message.copy(chat_id=partner_id, reply_to_message_id=reply_target_id)
+                
                 if sent_msg: MESSAGE_MAP[(partner_id, sent_msg.message_id)] = update.message.message_id
             except: await stop_chat(update, context)
 
@@ -886,6 +914,31 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     all_stops = [x["BTN_STOP"] for x in locale_data.TEXTS.values()] + [x["BTN_STOP_CHAT"] for x in locale_data.TEXTS.values()]
     if text in all_stops or text == "🛑 Stop": await stop_chat(update, context); return
     if text in [x["BTN_NEXT"] for x in locale_data.TEXTS.values()] or text == "⏭️ Next": await stop_chat(update, context, is_next=True); return
+    
+    # --- TRANSLATE BUTTONS & CATCH-UP LOGIC ---
+    all_trans_on = [x.get("BTN_TRANS_ON", "🔤 Translate") for x in locale_data.TEXTS.values()] + ["🔤 Translate"]
+    if text in all_trans_on:
+        pid = ACTIVE_CHATS.get(user_id)
+        if not pid or isinstance(pid, str): return
+        TRANSLATE_ENABLED.add(user_id)
+        
+        conn = get_conn(); cur = conn.cursor()
+        cur.execute("SELECT message FROM chat_logs WHERE sender_id = %s AND receiver_id = %s ORDER BY timestamp DESC LIMIT 3", (pid, user_id))
+        rows = cur.fetchall(); cur.close(); release_conn(conn)
+        
+        if rows:
+            combined = "\n".join([r[0] for r in reversed(rows)])
+            translated = await translate_text(combined, l)
+            await update.message.reply_text(get_text(l, "TRANS_CATCHUP").format(text=translated), reply_markup=get_keyboard_chat(l, True), parse_mode='Markdown')
+        else:
+            await update.message.reply_text("🔄 **Translation ON.**", reply_markup=get_keyboard_chat(l, True), parse_mode='Markdown')
+        return
+
+    all_trans_off = [x.get("BTN_TRANS_OFF", "🧊 Stop Translate") for x in locale_data.TEXTS.values()] + ["🧊 Stop Translate"]
+    if text in all_trans_off:
+        if user_id in TRANSLATE_ENABLED: TRANSLATE_ENABLED.remove(user_id)
+        await update.message.reply_text("💧 **Translation OFF.**", reply_markup=get_keyboard_chat(l, False), parse_mode='Markdown')
+        return
     
     if text in [x["BTN_GAMES"] for x in locale_data.TEXTS.values()] or text == "🎮 Games":
         kb = [[InlineKeyboardButton("😈 Truth or Dare", callback_data="game_offer_Truth or Dare")],
