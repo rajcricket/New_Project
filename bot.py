@@ -108,12 +108,24 @@ async def get_lang(user_id):
     return "English"
 async def translate_text(text, target_lang):
     if not GROQ_API_KEY: return text
-    prompt = f"Translate this internet slang/chat text to {target_lang}. Reply ONLY with the translation, absolutely nothing else. Text: '{text}'"
+    
+    # 🧠 Super-Prompt with context and slang cheat sheet
+    prompt = (
+        f"You are an expert slang translator for an anonymous chat app. "
+        f"Translate the following text to {target_lang}. "
+        f"Context clues: 'co' means boy/guy, 'ce' means girl, 'sange' means horny/aroused, 'gak' means no. "
+        f"Reply ONLY with the exact translation, absolutely nothing else. No quotes, no notes. "
+        f"Text: '{text}'"
+    )
+    
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    payload = {"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": prompt}], "temperature": 0.3}
+    
+    # 🚀 Upgraded to 70B model and lowered temperature to stop hallucinations
+    payload = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "temperature": 0.1}
+    
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers, timeout=4.0)
+            resp = await client.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers, timeout=5.0)
             return resp.json()["choices"][0]["message"]["content"].strip()
     except: return text
 # ==============================================================================
