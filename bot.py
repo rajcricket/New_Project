@@ -344,7 +344,7 @@ async def send_tod_options(context, target_id, mode):
     
     if target_id not in GAME_STATES: GAME_STATES[target_id] = {}
     GAME_STATES[target_id]["options"] = option_indices
-    GAME_STATES[target_id]["tod_mode"] = mode # Save the mode (truth or dare) so we know which list to look in later!
+    GAME_STATES[target_id]["tod_mode"] = mode 
     await context.bot.send_message(target_id, msg_text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
 async def send_wyr_round(context, p1, p2):
