@@ -123,19 +123,7 @@ def bg_log_message(sender_id, receiver_id, text):
 
 async def translate_text(text, target_lang):
     if not GROQ_API_KEY: return text
-    def bg_log_message(sender_id, receiver_id, text):
-    """Runs in the background so it doesn't freeze the bot"""
-    conn = get_conn()
-    if not conn: return
-    try:
-        cur = conn.cursor()
-        cur.execute("INSERT INTO chat_logs (sender_id, receiver_id, message) VALUES (%s, %s, %s)", (sender_id, receiver_id, text))
-        conn.commit()
-        cur.close()
-    except Exception as e:
-        print(f"Background Log Error: {e}")
-    finally:
-        release_conn(conn)
+    
     # 🧠 Super-Prompt with context and slang cheat sheet
     prompt = (
         f"You are an expert slang translator for an anonymous chat app. "
