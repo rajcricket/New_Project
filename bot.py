@@ -39,7 +39,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 # 🚀 HIGH-PERFORMANCE ENGINE (RAM Cache & Connection Pool)
 # ==============================================================================
 # Replace these strings with real file_ids later from your Render Logs!
-DEFAULT_MALE = "AgACAgUAAxkBAAIDbWnFVLX6LjG374-RxzYj_EdXsCjrAAJyDWsbQK0xVsZVFy9b3aYnAQADAgADeAADOgQ"
+DEFAULT_MALE = "AgACAgUAAxkBAAIWnFVLX6LjG374-RxzYj_EdXsCjrAAJyDWsbQK0xVsZVFy9b3aYnAQADAgADeAADOgQ"
 DEFAULT_FEMALE = "AgACAgUAAxkBAAIDdWnFXghImuyxdLW8-iIJEp1kwHAdAAKNDWsbQK0xVuqb4eiaOzUOAQADAgADeAADOgQ"
 DEFAULT_OTHER = "AgACAgUAAxkBAAIDemnFXpBYUU0YQkeTclrszyDczqUoAAKODWsbQK0xVhTsjry1NYnTAQADAgADeAADOgQ"
 
@@ -106,9 +106,36 @@ async def get_lang(user_id):
 
     # 3. Ultimate Failsafe if the database is completely down
     return "English"
+
+def bg_log_message(sender_id, receiver_id, text):
+    """Runs in the background so it doesn't freeze the bot"""
+    conn = get_conn()
+    if not conn: return
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO chat_logs (sender_id, receiver_id, message) VALUES (%s, %s, %s)", (sender_id, receiver_id, text))
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        print(f"Background Log Error: {e}")
+    finally:
+        release_conn(conn)
+
 async def translate_text(text, target_lang):
     if not GROQ_API_KEY: return text
-    
+    def bg_log_message(sender_id, receiver_id, text):
+    """Runs in the background so it doesn't freeze the bot"""
+    conn = get_conn()
+    if not conn: return
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO chat_logs (sender_id, receiver_id, message) VALUES (%s, %s, %s)", (sender_id, receiver_id, text))
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        print(f"Background Log Error: {e}")
+    finally:
+        release_conn(conn)
     # 🧠 Super-Prompt with context and slang cheat sheet
     prompt = (
         f"You are an expert slang translator for an anonymous chat app. "
@@ -879,9 +906,9 @@ async def relay_message(update, context):
                 return 
 
             if update.message.text:
-                conn = get_conn(); cur = conn.cursor()
-                cur.execute("INSERT INTO chat_logs (sender_id, receiver_id, message) VALUES (%s, %s, %s)", (user_id, partner_id, update.message.text))
-                conn.commit(); cur.close(); release_conn(conn)
+                # 🚀 Send the database save to a background thread instantly
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(None, bg_log_message, user_id, partner_id, update.message.text)
             
             try:
                 reply_target_id = None
