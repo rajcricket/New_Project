@@ -198,16 +198,35 @@ def init_db():
     ]
     for t in tables: cur.execute(t)
     
-    # Migration checks for new columns
+    # Migration checks for existing/staging databases with older users tables.
     try:
-        cols = ["username TEXT", "first_name TEXT", "report_count INTEGER DEFAULT 0", 
-                "banned_until TIMESTAMP", "gender TEXT DEFAULT 'Hidden'", 
-                "age_range TEXT DEFAULT 'Hidden'", "region TEXT DEFAULT 'Hidden'",
-                "nickname TEXT DEFAULT 'Anon'", "avatar_id TEXT", 
-                "filter_credits INTEGER DEFAULT 2", "referred_by BIGINT DEFAULT 0",
-                "last_daily_reward DATE"]
+        cols = [
+                "username TEXT",
+                "first_name TEXT",
+                "language TEXT DEFAULT 'English'",
+                "gender TEXT DEFAULT 'Hidden'",
+                "age_range TEXT DEFAULT 'Hidden'",
+                "region TEXT DEFAULT 'Hidden'",
+                "interests TEXT DEFAULT ''",
+                "mood TEXT DEFAULT 'Neutral'",
+                "karma_score INTEGER DEFAULT 100",
+                "status TEXT DEFAULT 'idle'",
+                "partner_id BIGINT DEFAULT 0",
+                "report_count INTEGER DEFAULT 0",
+                "banned_until TIMESTAMP",
+                "joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+                "nickname TEXT DEFAULT 'Anon'",
+                "avatar_id TEXT",
+                "filter_credits INTEGER DEFAULT 2",
+                "referred_by BIGINT DEFAULT 0",
+                "last_daily_reward DATE"
+        ]
         for c in cols: cur.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {c};")
-    except: pass
+    except Exception as e:
+        print(f"⚠️ User table migration error: {e}")
+        conn.rollback()
+        cur.close(); release_conn(conn)
+        return
     
     conn.commit(); cur.close(); release_conn(conn)
     global GHOST
