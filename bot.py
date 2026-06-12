@@ -42,19 +42,20 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 DEFAULT_MALE = "AgACAgUAAxkBAAIDbWnFVLX6LjG374-RxzYj_EdXsCjrAAJyDWsbQK0xVsZVFy9b3aYnAQADAgADeAADOgQ"
 DEFAULT_FEMALE = "AgACAgUAAxkBAAIDdWnFXghImuyxdLW8-iIJEp1kwHAdAAKNDWsbQK0xVuqb4eiaOzUOAQADAgADeAADOgQ"
 DEFAULT_OTHER = "AgACAgUAAxkBAAIDemnFXpBYUU0YQkeTclrszyDczqUoAAKODWsbQK0xVhTsjry1NYnTAQADAgADeAADOgQ"
-DEFAULT_AVATAR_PLACEHOLDERS = {"MALE_FILE_ID_HERE", "FEMALE_FILE_ID_HERE", "OTHER_FILE_ID_HERE"}
+
+USER_GHOST_HISTORY = {} 
 
 GHOST_PROFILES = {
-    "south_indian": {"name": "Arjun", "gender": "Male", "mood": "Chill", "karma": 165},
-    "north_indian": {"name": "Kabir", "gender": "Male", "mood": "Bored", "karma": 155},
-    "indo_teen": {"name": "Raka", "gender": "Male", "mood": "Random", "karma": 150},
-    "american_teen": {"name": "Mason", "gender": "Male", "mood": "Bored", "karma": 160},
-    "indian_girl_sobo": {"name": "Kiara", "gender": "Female", "mood": "Confident", "karma": 175},
-    "kpop_stan": {"name": "Mina", "gender": "Female", "mood": "Excited", "karma": 170},
-    "african_bro": {"name": "Tunde", "gender": "Male", "mood": "Chill", "karma": 160},
+    "south_indian": {"name": "Arjun", "gender": "Male", "karma": 110, "mood": "Bored", "avatar": DEFAULT_MALE},
+    "north_indian": {"name": "Kabir", "gender": "Male", "karma": 65, "mood": "Neutral", "avatar": DEFAULT_MALE},
+    "indo_teen": {"name": "Budi", "gender": "Male", "karma": 130, "mood": "Happy", "avatar": DEFAULT_MALE},
+    "american_teen": {"name": "Jake", "gender": "Male", "karma": 150, "mood": "Bored", "avatar": DEFAULT_MALE},
+    "indian_girl_sobo": {"name": "Aisha", "gender": "Female", "karma": 185, "mood": "Happy", "avatar": DEFAULT_FEMALE},
+    "kpop_stan": {"name": "Mia", "gender": "Female", "karma": 140, "mood": "Sad", "avatar": DEFAULT_FEMALE},
+    "african_bro": {"name": "David", "gender": "Male", "karma": 175, "mood": "Happy", "avatar": DEFAULT_MALE}
 }
 
-ACTIVE_CHATS = {} 
+ACTIVE_CHATS = {}
 MESSAGE_MAP = {}
 GAME_STATES = {}       
 GAME_COOLDOWNS = {}    
@@ -198,35 +199,16 @@ def init_db():
     ]
     for t in tables: cur.execute(t)
     
-    # Migration checks for existing/staging databases with older users tables.
+    # Migration checks for new columns
     try:
-        cols = [
-                "username TEXT",
-                "first_name TEXT",
-                "language TEXT DEFAULT 'English'",
-                "gender TEXT DEFAULT 'Hidden'",
-                "age_range TEXT DEFAULT 'Hidden'",
-                "region TEXT DEFAULT 'Hidden'",
-                "interests TEXT DEFAULT ''",
-                "mood TEXT DEFAULT 'Neutral'",
-                "karma_score INTEGER DEFAULT 100",
-                "status TEXT DEFAULT 'idle'",
-                "partner_id BIGINT DEFAULT 0",
-                "report_count INTEGER DEFAULT 0",
-                "banned_until TIMESTAMP",
-                "joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-                "nickname TEXT DEFAULT 'Anon'",
-                "avatar_id TEXT",
-                "filter_credits INTEGER DEFAULT 2",
-                "referred_by BIGINT DEFAULT 0",
-                "last_daily_reward DATE"
-        ]
+        cols = ["username TEXT", "first_name TEXT", "report_count INTEGER DEFAULT 0", 
+                "banned_until TIMESTAMP", "gender TEXT DEFAULT 'Hidden'", 
+                "age_range TEXT DEFAULT 'Hidden'", "region TEXT DEFAULT 'Hidden'",
+                "nickname TEXT DEFAULT 'Anon'", "avatar_id TEXT", 
+                "filter_credits INTEGER DEFAULT 2", "referred_by BIGINT DEFAULT 0",
+                "last_daily_reward DATE"]
         for c in cols: cur.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {c};")
-    except Exception as e:
-        print(f"⚠️ User table migration error: {e}")
-        conn.rollback()
-        cur.close(); release_conn(conn)
-        return
+    except: pass
     
     conn.commit(); cur.close(); release_conn(conn)
     global GHOST
@@ -324,6 +306,7 @@ async def offer_game(update, context, user_id, game_name):
     l1 = await get_lang(user_id)
     if isinstance(partner_id, str) and partner_id.startswith("AI_"):
         accept, reply_text = GHOST.decide_game_offer(game_name)
+        await context.bot.send_chat_action(chat_id=user_id, action="typing")
         await asyncio.sleep(2)
         await context.bot.send_message(user_id, reply_text)
         if accept:
@@ -636,45 +619,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==============================================================================
 # 🔌 FAST CONNECTION LOGIC (Trading Card UI)
 # ==============================================================================
-def get_title(karma):
-    try:
-        karma = int(karma or 100)
-    except (TypeError, ValueError):
-        karma = 100
-    return "🌟 Trusted Veteran" if karma >= 150 else ("⚠️ Suspect" if karma <= 50 else "🌱 Rookie")
-
-def get_default_avatar(gender):
-    return DEFAULT_MALE if gender == "Male" else (DEFAULT_FEMALE if gender == "Female" else DEFAULT_OTHER)
-
-def is_valid_avatar(avatar_id):
-    return bool(avatar_id) and avatar_id not in DEFAULT_AVATAR_PLACEHOLDERS
-
-def build_anon_card(name, karma, mood, common):
-    common_str = ", ".join(common).title() if isinstance(common, list) and common else (common or "Random")
-    return (
-        f"🪪 **OFFICIAL ANON ID**\n━━━━━━━━━━━━━━━\n"
-        f"👤 **Name:** {name or 'Anon'}\n"
-        f"👑 **Status:** {get_title(karma)}\n"
-        f"🎭 **Vibe:** {mood or 'Random'}\n\n"
-        f"📊 **STATS:**\n🔗 **Common:** {common_str}\n\n"
-        f"⚠️ *Say Hi to start chatting!*"
-    )
-
-async def send_anon_card(context, target_id, avatar_id, caption, keyboard, fallback_label="No Avatar Set"):
-    try:
-        if is_valid_avatar(avatar_id):
-            await context.bot.send_photo(target_id, photo=avatar_id, caption=caption, reply_markup=keyboard, parse_mode='Markdown')
-        else:
-            await context.bot.send_message(target_id, f"🖼️ [{fallback_label}]\n\n{caption}", reply_markup=keyboard, parse_mode='Markdown')
-    except Exception as e:
-        print("Card Error:", e)
-        await context.bot.send_message(target_id, caption, reply_markup=keyboard, parse_mode='Markdown')
-
-def get_ghost_profile(persona):
-    profile = GHOST_PROFILES.get(persona, GHOST_PROFILES["american_teen"]).copy()
-    profile["avatar_id"] = get_default_avatar(profile.get("gender", "Hidden"))
-    return profile
-
 async def execute_ghost_search(context, user_id, u_gender, u_region):
     await asyncio.sleep(15)  
     conn = get_conn()
@@ -684,21 +628,36 @@ async def execute_ghost_search(context, user_id, u_gender, u_region):
     status = cur.fetchone(); cur.close(); release_conn(conn)
     
     if status and status[0] == 'searching':
-        persona = GHOST.pick_random_persona() 
-        ghost_profile = get_ghost_profile(persona)
+        history = USER_GHOST_HISTORY.get(user_id, [])
+        available = [k for k in GHOST_PROFILES.keys() if k not in history]
+        if not available:
+            history = [] 
+            available = list(GHOST_PROFILES.keys())
+        
+        chosen_ai = random.choice(available)
+        USER_GHOST_HISTORY.setdefault(user_id, []).append(chosen_ai)
+        prof = GHOST_PROFILES[chosen_ai]
+
         user_ctx = {'gender': u_gender, 'country': u_region}
-        success = await GHOST.start_chat(user_id, persona, ghost_profile["gender"], user_ctx)
+        success = await GHOST.start_chat(user_id, chosen_ai, prof["gender"], user_ctx)
         
         if success:
-            ACTIVE_CHATS[user_id] = f"AI_{persona}"
+            ACTIVE_CHATS[user_id] = f"AI_{chosen_ai}"
             l = await get_lang(user_id)
             
-            card = build_anon_card(ghost_profile["name"], ghost_profile["karma"], ghost_profile["mood"], "Random")
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🚨 Report Profile", callback_data="report_profile_AI")]])
+            def get_title(k): return "🌟 Trusted Veteran" if k >= 150 else ("⚠️ Suspect" if k <= 50 else "🌱 Rookie")
+            
+            card = (f"🪪 **OFFICIAL ANON ID**\n━━━━━━━━━━━━━━━\n"
+                    f"👤 **Name:** {prof['name']}\n👑 **Status:** {get_title(prof['karma'])}\n🎭 **Vibe:** {prof['mood']}\n\n"
+                    f"📊 **STATS:**\n🔗 **Common:** Random\n\n⚠️ *Say Hi to start chatting!*")
+            
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🚨 Report Profile", callback_data=f"report_profile_{chosen_ai}")]])
+            
             try: 
-                await send_anon_card(context, user_id, ghost_profile["avatar_id"], card, kb, "Ghost Avatar")
+                await context.bot.send_photo(user_id, photo=prof['avatar'], caption=card, reply_markup=kb, parse_mode='Markdown')
                 await context.bot.send_message(user_id, "🎮 Menu unlocked below.", reply_markup=get_keyboard_chat(l))
-            except: pass
+            except Exception as e: 
+                print(f"Ghost Card Error: {e}")
 
 async def execute_premium_search_timeout(context, user_id, val, col):
     await asyncio.sleep(15)  
@@ -747,19 +706,26 @@ async def connect_users(context, user_id, partner_id, common, p_mood, p_lang, p_
     u1_mood = u1[4] if u1 else "Neutral"
     
     ACTIVE_CHATS[user_id] = partner_id; ACTIVE_CHATS[partner_id] = user_id
+    common_str = ", ".join(common).title() if common else "Random"
     l1 = await get_lang(user_id); l2 = await get_lang(partner_id)
+    
+    def get_title(k): return "🌟 Trusted Veteran" if k >= 150 else ("⚠️ Suspect" if k <= 50 else "🌱 Rookie")
+    def get_def(g): return DEFAULT_MALE if g == "Male" else (DEFAULT_FEMALE if g == "Female" else DEFAULT_OTHER)
 
-    c1 = build_anon_card(p_nick, p_karma, p_mood, common)
-    a1 = p_ava if p_ava else get_default_avatar(p_gen)
+    c1 = f"🪪 **OFFICIAL ANON ID**\n━━━━━━━━━━━━━━━\n👤 **Name:** {p_nick}\n👑 **Status:** {get_title(p_karma)}\n🎭 **Vibe:** {p_mood}\n\n📊 **STATS:**\n🔗 **Common:** {common_str}\n\n⚠️ *Say Hi to start chatting!*"
+    a1 = p_ava if p_ava else get_def(p_gen)
     kb1 = InlineKeyboardMarkup([[InlineKeyboardButton("🚨 Report Profile", callback_data=f"report_profile_{partner_id}")]])
     
-    c2 = build_anon_card(u1_nick, u1_karma, u1_mood, common)
-    a2 = u1_ava if u1_ava else get_default_avatar(u1_gen)
+    c2 = f"🪪 **OFFICIAL ANON ID**\n━━━━━━━━━━━━━━━\n👤 **Name:** {u1_nick}\n👑 **Status:** {get_title(u1_karma)}\n🎭 **Vibe:** {u1_mood}\n\n📊 **STATS:**\n🔗 **Common:** {common_str}\n\n⚠️ *Say Hi to start chatting!*"
+    a2 = u1_ava if u1_ava else get_def(u1_gen)
     kb2 = InlineKeyboardMarkup([[InlineKeyboardButton("🚨 Report Profile", callback_data=f"report_profile_{user_id}")]])
     
     for target, av, cap, kb, lang in [(user_id, a1, c1, kb1, l1), (partner_id, a2, c2, kb2, l2)]:
         try:
-            await send_anon_card(context, target, av, cap, kb)
+            if av and av != "MALE_FILE_ID_HERE" and av != "FEMALE_FILE_ID_HERE" and av != "OTHER_FILE_ID_HERE": 
+                await context.bot.send_photo(target, photo=av, caption=cap, reply_markup=kb, parse_mode='Markdown')
+            else: 
+                await context.bot.send_message(target, f"🖼️ [No Avatar Set]\n\n{cap}", reply_markup=kb, parse_mode='Markdown')
             await context.bot.send_message(target, "🎮 Menu unlocked below.", reply_markup=get_keyboard_chat(lang))
         except Exception as e: 
             print("Card Error:", e)
@@ -952,19 +918,29 @@ async def relay_message(update, context):
             if result in ["TRIGGER_SKIP", "TRIGGER_INDIAN_MALE_BEG"]:
                 await stop_chat(update, context)
                 return
+                
             if isinstance(result, dict) and result.get("type") == "text":
                 reply_text = result['content']
                 triggers = ["bye", "skip", "stop", "boring", "bsdk", "hat", "leave", "gtg"]
                 is_leaving = any(f" {t} " in f" {reply_text.lower()} " for t in triggers)
                 is_ghosting = random.random() < 0.05
+                
                 if is_leaving or is_ghosting:
                     if not is_ghosting:
+                        await context.bot.send_chat_action(chat_id=user_id, action="typing")
                         await asyncio.sleep(result['delay'])
                         await update.message.reply_text(reply_text)
                     await asyncio.sleep(1) 
                     await stop_chat(update, context)
                     return
+                
+                await context.bot.send_chat_action(chat_id=user_id, action="typing")
                 await asyncio.sleep(result['delay'])
+                
+                conn = get_conn(); cur = conn.cursor()
+                cur.execute("INSERT INTO chat_logs (sender_id, receiver_id, message) VALUES (%s, %s, %s)", (0, user_id, reply_text))
+                conn.commit(); cur.close(); release_conn(conn)
+                
                 await update.message.reply_text(reply_text)
         return
 
@@ -1416,27 +1392,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
    # ADMIN: PROFILE REPORTING SYSTEM
     if data.startswith("report_profile_"):
-        target_id = data.split("_", 2)[2]
+        target_id = data.split("_")[2]
         try: await q.edit_message_caption("🚨 Report sent to admins.")
         except: 
             try: await q.edit_message_text("🚨 Report sent to admins.")
             except: pass
-
-        if target_id == "AI":
-            ghost_partner = ACTIVE_CHATS.get(uid, "AI_unknown")
-            for a in ADMIN_IDS:
-                try:
-                    await context.bot.send_message(a, f"🚨 **GHOST PROFILE REPORT**\nReporter: `{uid}`\nProfile: `{ghost_partner}`", parse_mode='Markdown')
-                except: pass
-            return
-
-        try:
-            target_int = int(target_id)
-        except ValueError:
-            return
         
         conn = get_conn(); cur = conn.cursor()
-        cur.execute("SELECT nickname, avatar_id FROM users WHERE user_id = %s", (target_int,))
+        cur.execute("SELECT nickname, avatar_id FROM users WHERE user_id = %s", (int(target_id),))
         t_data = cur.fetchone(); cur.close(); release_conn(conn)
         if t_data:
             akb = [[InlineKeyboardButton("🗑️ Delete Avatar", callback_data=f"admin_del_avatar_{target_id}"), InlineKeyboardButton("🔨 Ban User", callback_data=f"ban_user_{target_id}")],
